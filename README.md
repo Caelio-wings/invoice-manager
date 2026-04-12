@@ -5,11 +5,12 @@
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)]()
 
 > 轻量级发票识别与管理工具 · 本地优先 · API 两级降级 · 一键导出报销
-基于https://github.com/Alan5168/fapiao-clipper改进
+
 **发票夹子 v2.0** 是一个专注于**发票识别、归档、管理、导出**的轻量级工具。  
 剥离了旧版的复杂风控、邮件拉取和验真功能，保留核心发票处理流程，支持 CLI 命令行和 Web 可视化界面双入口，适合个人、自由职业者或小微企业快速整理电子发票。
 
 ---
+基于https://github.com/Alan5168/fapiao-clipper改进
 
 ## ✨ 功能特性
 
