@@ -1,4 +1,4 @@
-## 发票夹子 v2.0 🧾
+## 发票夹子🧾
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
@@ -6,11 +6,11 @@
 
 > 轻量级发票识别与管理工具 · 本地优先 · API 两级降级 · 一键导出报销
 
-**发票夹子 v2.0** 是一个专注于**发票识别、归档、管理、导出**的轻量级工具。  
+**发票夹子** 是一个专注于**发票识别、归档、管理、导出**的轻量级工具。  
 剥离了旧版的复杂风控、邮件拉取和验真功能，保留核心发票处理流程，支持 CLI 命令行和 Web 可视化界面双入口，适合个人、自由职业者或小微企业快速整理电子发票。
 
 ---
-基于https://github.com/Alan5168/fapiao-clipper改进
+基于https://github.com/Alan5168/fapiao-clipper 改进
 
 ## ✨ 功能特性
 
@@ -244,4 +244,4 @@ MIT License - 详见 [LICENSE](LICENSE) 文件。
 
 ---
 
-**发票夹子 v2.0** —— 让发票管理回归简单。如有问题或建议，欢迎提交 Issue。
+**发票夹子** —— 让发票管理回归简单。如有问题或建议，欢迎提交 Issue。
