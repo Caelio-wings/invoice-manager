@@ -23,7 +23,7 @@ from .database import (
     delete_invoice,
 )
 from .exporter import export_excel, export_merged_pdf, build_export_label
-from .file_utils import ofd_to_pdf, build_archive_path, archive_invoice, build_attachment_dir
+from .file_utils import ofd_to_pdf, build_archive_path, archive_invoice, build_attachment_path, next_attachment_seq
 
 __all__ = [
     # 处理器
@@ -56,5 +56,6 @@ __all__ = [
     "extract_text_from_pdf",
     "build_archive_path",
     "archive_invoice",
-    "build_attachment_dir",
+    "build_attachment_path",
+    "next_attachment_seq",
 ]

@@ -108,15 +108,35 @@ def ofd_to_pdf(ofd_path: Path, output_dir: Optional[Path] = None) -> Path:
     )
 
 
-def build_attachment_dir(base_dir: Path, invoice_id: int) -> Path:
+def build_attachment_path(invoice_stored_path: str, seq: int, ext: str) -> Path:
     """
-    构建附件存储目录路径，确保目录存在
+    构建附件存储路径，与发票 PDF 放在同一目录
 
-    路径格式: {base_dir}/attachments/{invoice_id}/
+    路径格式: {invoice_dir}/{invoice_stem}_附件_{seq:02d}{ext}
+
+    例如: invoice/2026/2026-05-12_126.85_公司名_788564.pdf
+          → invoice/2026/2026-05-12_126.85_公司名_788564_附件_01.jpg
     """
-    att_dir = base_dir / "attachments" / str(invoice_id)
-    att_dir.mkdir(parents=True, exist_ok=True)
-    return att_dir
+    inv_path = Path(invoice_stored_path)
+    stem = inv_path.stem  # 不带扩展名的文件名
+    filename = f"{stem}_附件_{seq:02d}{ext}"
+    return inv_path.parent / filename
+
+
+def next_attachment_seq(invoice_stored_path: str) -> int:
+    """查询该发票已有的附件序号，返回下一个可用序号（从01开始）"""
+    inv_path = Path(invoice_stored_path)
+    stem = inv_path.stem
+    existing = sorted(inv_path.parent.glob(f"{stem}_附件_*.*"))
+    if not existing:
+        return 1
+    # 从最后一个文件中提取序号
+    import re
+    last = existing[-1].stem
+    m = re.search(r'_附件_(\d+)$', last)
+    if m:
+        return int(m.group(1)) + 1
+    return len(existing) + 1
 
 
 def make_safe_filename(text: str, max_len: int = 50) -> str:

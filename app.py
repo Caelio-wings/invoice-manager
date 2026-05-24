@@ -339,11 +339,10 @@ def page_list(cfg):
     st.subheader("📎 附件管理")
 
     from invoice_clipper.database import get_attachments, insert_attachment, delete_attachment
-    from invoice_clipper.file_utils import build_attachment_dir
-    import uuid
+    from invoice_clipper.file_utils import build_attachment_path, next_attachment_seq
 
     attachments = get_attachments(db_path, int(selected_id))
-    base_dir = Path(cfg["storage"]["base_dir"]).expanduser()
+    inv_stored = inv.get("stored_path", "")
 
     # 展示已有附件
     if attachments:
@@ -375,45 +374,46 @@ def page_list(cfg):
         st.caption("暂无附件")
 
     # 上传新附件
-    st.markdown("**📤 上传附件**")
-    # 用递增计数器做 key 的一部分，上传后换 key 防止循环
-    up_counter = st.session_state.get(f"att_upcnt_{selected_id}", 0)
-    upload_col1, upload_col2 = st.columns([3, 1])
-    with upload_col1:
-        uploaded = st.file_uploader(
-            "选择文件（图片/PDF）",
-            type=["png", "jpg", "jpeg", "bmp", "pdf", "webp"],
-            accept_multiple_files=True,
-            key=f"att_upload_{selected_id}_v{up_counter}",
-            label_visibility="collapsed")
-    with upload_col2:
-        file_type = st.selectbox("文件类型", ["payment", "receipt", "other"],
-                                 format_func=lambda x: {"payment": "付款记录", "receipt": "收据", "other": "其他"}.get(x, x),
-                                 key=f"att_type_{selected_id}",
-                                 label_visibility="collapsed")
+    if not inv_stored:
+        st.warning("发票尚未归档，无法上传附件")
+    else:
+        st.markdown("**📤 上传附件**")
+        up_counter = st.session_state.get(f"att_upcnt_{selected_id}", 0)
+        upload_col1, upload_col2 = st.columns([3, 1])
+        with upload_col1:
+            uploaded = st.file_uploader(
+                "选择文件（图片/PDF）",
+                type=["png", "jpg", "jpeg", "bmp", "pdf", "webp"],
+                accept_multiple_files=True,
+                key=f"att_upload_{selected_id}_v{up_counter}",
+                label_visibility="collapsed")
+        with upload_col2:
+            file_type = st.selectbox("文件类型", ["payment", "receipt", "other"],
+                                     format_func=lambda x: {"payment": "付款记录", "receipt": "收据", "other": "其他"}.get(x, x),
+                                     key=f"att_type_{selected_id}",
+                                     label_visibility="collapsed")
 
-    if uploaded:
-        att_dir = build_attachment_dir(base_dir, int(selected_id))
-        for uf in uploaded:
-            ext = Path(uf.name).suffix.lower() or ".bin"
-            safe_name = f"{uuid.uuid4().hex[:16]}{ext}"
-            dest = att_dir / safe_name
-            with open(dest, "wb") as fp:
-                fp.write(uf.getvalue())
+        if uploaded:
+            seq = next_attachment_seq(inv_stored)
+            for uf in uploaded:
+                ext = Path(uf.name).suffix.lower() or ".bin"
+                dest = build_attachment_path(inv_stored, seq, ext)
+                with open(dest, "wb") as fp:
+                    fp.write(uf.getvalue())
 
-            insert_attachment(db_path, {
-                "invoice_id": int(selected_id),
-                "filename": safe_name,
-                "original_name": uf.name,
-                "file_type": file_type,
-                "stored_path": str(dest),
-                "file_size": len(uf.getvalue()),
-                "created_at": datetime.now().isoformat(),
-            })
-        # 递增计数器 → 下次渲染 uploader key 不同 → 自动清空
-        st.session_state[f"att_upcnt_{selected_id}"] = up_counter + 1
-        st.success(f"已上传 {len(uploaded)} 个附件")
-        st.rerun()
+                insert_attachment(db_path, {
+                    "invoice_id": int(selected_id),
+                    "filename": dest.name,
+                    "original_name": uf.name,
+                    "file_type": file_type,
+                    "stored_path": str(dest),
+                    "file_size": len(uf.getvalue()),
+                    "created_at": datetime.now().isoformat(),
+                })
+                seq += 1
+            st.session_state[f"att_upcnt_{selected_id}"] = up_counter + 1
+            st.success(f"已上传 {len(uploaded)} 个附件")
+            st.rerun()
 
     # 原始数据
     with st.expander("📦 原始数据（JSON）"):
