@@ -108,6 +108,17 @@ def ofd_to_pdf(ofd_path: Path, output_dir: Optional[Path] = None) -> Path:
     )
 
 
+def build_attachment_dir(base_dir: Path, invoice_id: int) -> Path:
+    """
+    构建附件存储目录路径，确保目录存在
+
+    路径格式: {base_dir}/attachments/{invoice_id}/
+    """
+    att_dir = base_dir / "attachments" / str(invoice_id)
+    att_dir.mkdir(parents=True, exist_ok=True)
+    return att_dir
+
+
 def make_safe_filename(text: str, max_len: int = 50) -> str:
     """将任意文本转换为安全的文件名"""
     # 移除非法字符，保留中文、字母、数字、空格、横线

@@ -16,9 +16,14 @@ from .database import (
     exclude_invoice,
     is_duplicate,
     exists_by_invoice_number,
+    get_attachments,
+    insert_attachment,
+    delete_attachment,
+    delete_attachments_by_invoice,
+    delete_invoice,
 )
 from .exporter import export_excel, export_merged_pdf, build_export_label
-from .file_utils import ofd_to_pdf, build_archive_path, archive_invoice
+from .file_utils import ofd_to_pdf, build_archive_path, archive_invoice, build_attachment_dir
 
 __all__ = [
     # 处理器
@@ -36,6 +41,12 @@ __all__ = [
     "exclude_invoice",
     "is_duplicate",
     "exists_by_invoice_number",
+    # 附件
+    "get_attachments",
+    "insert_attachment",
+    "delete_attachment",
+    "delete_attachments_by_invoice",
+    "delete_invoice",
     # 导出
     "export_excel",
     "export_merged_pdf",
@@ -45,4 +56,5 @@ __all__ = [
     "extract_text_from_pdf",
     "build_archive_path",
     "archive_invoice",
+    "build_attachment_dir",
 ]

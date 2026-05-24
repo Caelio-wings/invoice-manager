@@ -114,10 +114,12 @@ def page_scan(cfg):
     st.success(f"处理完成：{ok}/{len(results)} 张识别成功")
 
 # ─────────────────────────────────────────────────────────
-# 列表页
+# 列表页（列表编辑一体化）
 # ─────────────────────────────────────────────────────────
 def page_list(cfg):
     st.header("📋 发票列表")
+
+    db_path = str(get_db_path(cfg))
     invs_all = load_invoices(cfg, {"only_included": False})
     if not invs_all:
         st.info("暂无发票记录，请先扫描发票")
@@ -125,7 +127,6 @@ def page_list(cfg):
 
     invs_ok = [i for i in invs_all if not i.get("excluded")]
     invs_ex = [i for i in invs_all if i.get("excluded")]
-
     total_amount = sum(i.get("amount_with_tax", 0) for i in invs_all)
     reimbursable_amount = sum(i.get("amount_with_tax", 0) for i in invs_ok)
 
@@ -137,25 +138,26 @@ def page_list(cfg):
               delta=f"总金额 ¥{total_amount:,.2f}")
 
     st.markdown("---")
-    c1, c2, c3 = st.columns([2, 2, 1])
+    c1, c2 = st.columns([2, 1])
     with c1:
+        search = st.text_input("搜索销售方 / 购买方 / 发票号码 / 项目名称",
+                               placeholder="输入关键词...", key="list_search")
+    with c2:
         filt = st.multiselect("状态筛选", ["✅ 正常", "❌ 排除"],
                               default=["✅ 正常"], key="list_filt")
-    with c2:
-        search = st.text_input("搜索销售方 / 购买方 / 发票号码", placeholder="输入关键词...", key="list_search")
-    with c3:
-        st.write("")
-        st.write("")
 
     # 构建展示数据
     data = []
+    id_to_inv = {}
     for i in invs_all:
+        inv_id = i.get("id")
+        id_to_inv[inv_id] = i
         data.append({
-            "ID": i.get("id"),
+            "ID": inv_id,
             "开票日期": i.get("invoice_date", ""),
             "发票号码": i.get("invoice_number", ""),
-            "项目名称": i.get("commodity_name", ""),          # 新增
-            "规格型号": i.get("specification_model", ""),     # 新增
+            "项目名称": i.get("commodity_name", ""),
+            "规格型号": i.get("specification_model", ""),
             "销售方": i.get("seller_name", ""),
             "购买方": i.get("buyer_name", ""),
             "价税合计": i.get("amount_with_tax", 0),
@@ -178,103 +180,244 @@ def page_list(cfg):
         fd = fd[
             fd["销售方"].str.contains(search, case=False, na=False) |
             fd["购买方"].str.contains(search, case=False, na=False) |
-            fd["发票号码"].str.contains(search, case=False, na=False)
+            fd["发票号码"].str.contains(search, case=False, na=False) |
+            fd["项目名称"].str.contains(search, case=False, na=False)
         ]
 
-    st.dataframe(
+    # 表格 — 可点击选行
+    st.caption(f"共 {len(fd)} 张发票，点击行查看/编辑详情")
+    sel = st.dataframe(
         fd.drop(columns=["ID"]),
+        selection_mode="single-row",
+        on_select="rerun",
         use_container_width=True, hide_index=True,
         column_config={
             "价税合计": st.column_config.NumberColumn(format="¥%.2f"),
             "税额": st.column_config.NumberColumn(format="¥%.2f"),
         })
 
-    # ── 发票详情编辑 ──────────────────────────────────────
-    if not fd.empty:
-        st.markdown("---")
-        st.subheader("📄 发票详情与编辑")
-        selected_id = st.selectbox(
-            "选择发票 ID 查看/编辑",
-            options=fd["ID"].tolist(),
-            format_func=lambda x: f"#{x} - {fd[fd['ID']==x]['发票号码'].values[0]} - "
-                                  f"¥{fd[fd['ID']==x]['价税合计'].values[0]:,.2f}",
-            key="detail_select")
-        if selected_id:
-            inv = next((i for i in invs_all if i.get("id") == selected_id), None)
-            if inv:
-                col1, col2, col3= st.columns(3)
-                with col1:
-                    inv_num = st.text_input("发票号码", value=inv.get("invoice_number", ""))
-                    inv_code = st.text_input("发票代码", value=inv.get("invoice_code", ""))
-                    inv_date = st.text_input("开票日期", value=inv.get("invoice_date", ""))
-                    commodity = st.text_input("项目名称", value=inv.get("commodity_name", ""))
-                    spec = st.text_input("规格型号", value=inv.get("specification_model", ""))
-                    category = st.text_input("分类", value=inv.get("category", ""))
-                with col2:
-                    buyer_name = st.text_input("购买方名称", value=inv.get("buyer_name", ""))
-                    buyer_tax = st.text_input("购买方税号", value=inv.get("buyer_tax_num", ""))
-                    seller_name = st.text_input("销售方名称", value=inv.get("seller_name", ""))
-                    seller_tax = st.text_input("销售方税号", value=inv.get("seller_tax_num", ""))
+    # ── 获取选中行 ──────────────────────────────────────
+    selected_rows = []
+    if sel is not None:
+        if hasattr(sel, 'selection') and hasattr(sel.selection, 'rows'):
+            selected_rows = sel.selection.rows
+        elif isinstance(sel, dict):
+            selected_rows = sel.get("selection", {}).get("rows", [])
 
-                with col3:
-                    amount = st.number_input("价税合计", value=float(inv.get("amount_with_tax", 0)), format="%.2f")
-                    tax = st.number_input("税额", value=float(inv.get("tax_amount", 0)), format="%.2f")
-                    tax_rate = st.number_input("税率 (小数)", value=float(inv.get("tax_rate") or 0), format="%.4f")
-                    belong_project = st.text_input("归属项目", value=inv.get("belong_project", ""))
-                    belong_person = st.text_input("归属人", value=inv.get("belong_person", ""))
-                    remark = st.text_input("备注", value=inv.get("remark", ""))
-
-                if st.button("💾 保存修改", use_container_width=True):
-                    from invoice_clipper.database import update_invoice
-                    updates = {
-                        "invoice_number": inv_num,
-                        "invoice_code": inv_code,
-                        "invoice_date": inv_date,
-                        "commodity_name": commodity,
-                        "specification_model": spec,
-                        "buyer_name": buyer_name,
-                        "buyer_tax_num": buyer_tax,
-                        "seller_name": seller_name,
-                        "seller_tax_num": seller_tax,
-                        "amount_with_tax": amount,
-                        "tax_amount": tax,
-                        "tax_rate": tax_rate,
-                        "category": category,
-                        "belong_project": belong_project,
-                        "belong_person": belong_person,
-                        "remark": remark,
-                    }
-                    update_invoice(str(get_db_path(cfg)), int(selected_id), updates)
-                    st.success("修改已保存")
+    if not selected_rows:
+        # ── 批量操作 ───────────────────────────────────────
+        with st.expander("🔧 批量操作"):
+            c1, c2 = st.columns(2)
+            with c1:
+                ids = st.multiselect("选择发票 ID",
+                    options=df["ID"].tolist(),
+                    format_func=lambda x: f"#{x}",
+                    key="batch_ids")
+            cc1, cc2 = st.columns(2)
+            with cc1:
+                if st.button("🚫 标记为排除", use_container_width=True) and ids:
+                    from invoice_clipper.database import update_invoice_status
+                    for i in ids:
+                        update_invoice_status(db_path, int(i), excluded=True)
+                    st.success(f"已排除 {len(ids)} 张发票")
                     st.rerun()
+            with cc2:
+                if st.button("✅ 恢复为正常", use_container_width=True) and ids:
+                    from invoice_clipper.database import update_invoice_status
+                    for i in ids:
+                        update_invoice_status(db_path, int(i), excluded=False)
+                    st.success(f"已恢复 {len(ids)} 张发票")
+                    st.rerun()
+        return
 
-                with st.expander("📦 原始数据（JSON）"):
-                    st.json(inv)
+    # ── 详情编辑（一体化面板）────────────────────────────
+    row_idx = selected_rows[0]
+    selected_id = fd.iloc[row_idx]["ID"]
+    inv = id_to_inv.get(selected_id)
+    if not inv:
+        return
 
-    # ── 批量操作 ───────────────────────────────────────
     st.markdown("---")
-    st.subheader("批量操作")
-    c1, c2 = st.columns(2)
-    with c1:
-        ids = st.multiselect("选择发票 ID",
-            options=df["ID"].tolist(),
-            format_func=lambda x: f"#{x}",
-            key="batch_ids")
-    cc1, cc2 = st.columns(2)
-    with cc1:
-        if st.button("🚫 标记为排除", use_container_width=True) and ids:
-            from invoice_clipper.database import update_invoice_status
-            for i in ids:
-                update_invoice_status(str(get_db_path(cfg)), int(i), excluded=True)
-            st.success(f"已排除 {len(ids)} 张发票")
+    st.subheader(f"📄 编辑发票 #{selected_id}")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        inv_num = st.text_input("发票号码", value=inv.get("invoice_number", ""), key="ed_inv_num")
+        inv_code = st.text_input("发票代码", value=inv.get("invoice_code", ""), key="ed_inv_code")
+        inv_date = st.text_input("开票日期", value=inv.get("invoice_date", ""), key="ed_inv_date")
+        commodity = st.text_input("项目名称", value=inv.get("commodity_name", ""), key="ed_commodity")
+        spec = st.text_input("规格型号", value=inv.get("specification_model", ""), key="ed_spec")
+        category = st.text_input("分类", value=inv.get("category", ""), key="ed_category")
+    with col2:
+        buyer_name = st.text_input("购买方名称", value=inv.get("buyer_name", ""), key="ed_buyer")
+        buyer_tax = st.text_input("购买方税号", value=inv.get("buyer_tax_num", ""), key="ed_buyer_tax")
+        seller_name = st.text_input("销售方名称", value=inv.get("seller_name", ""), key="ed_seller")
+        seller_tax = st.text_input("销售方税号", value=inv.get("seller_tax_num", ""), key="ed_seller_tax")
+    with col3:
+        amount = st.number_input("价税合计", value=float(inv.get("amount_with_tax", 0)), format="%.2f", key="ed_amount")
+        tax = st.number_input("税额", value=float(inv.get("tax_amount", 0)), format="%.2f", key="ed_tax")
+        tax_rate = st.number_input("税率 (小数)", value=float(inv.get("tax_rate") or 0), format="%.4f", key="ed_tax_rate")
+        belong_project = st.text_input("归属项目", value=inv.get("belong_project", ""), key="ed_project")
+        belong_person = st.text_input("归属人", value=inv.get("belong_person", ""), key="ed_person")
+        remark = st.text_input("备注", value=inv.get("remark", ""), key="ed_remark")
+
+    # 按钮栏
+    bc1, bc2, bc3, bc4 = st.columns([1, 1, 1, 2])
+    with bc1:
+        if st.button("💾 保存修改", use_container_width=True):
+            from invoice_clipper.database import update_invoice
+            updates = {
+                "invoice_number": inv_num,
+                "invoice_code": inv_code,
+                "invoice_date": inv_date,
+                "commodity_name": commodity,
+                "specification_model": spec,
+                "buyer_name": buyer_name,
+                "buyer_tax_num": buyer_tax,
+                "seller_name": seller_name,
+                "seller_tax_num": seller_tax,
+                "amount_with_tax": amount,
+                "tax_amount": tax,
+                "tax_rate": tax_rate,
+                "category": category,
+                "belong_project": belong_project,
+                "belong_person": belong_person,
+                "remark": remark,
+            }
+            update_invoice(db_path, int(selected_id), updates)
+            st.success("修改已保存")
             st.rerun()
-    with cc2:
-        if st.button("✅ 恢复为正常", use_container_width=True) and ids:
-            from invoice_clipper.database import update_invoice_status
-            for i in ids:
-                update_invoice_status(str(get_db_path(cfg)), int(i), excluded=False)
-            st.success(f"已恢复 {len(ids)} 张发票")
-            st.rerun()
+    with bc2:
+        if inv.get("excluded"):
+            if st.button("✅ 恢复报销", use_container_width=True):
+                from invoice_clipper.database import update_invoice_status
+                update_invoice_status(db_path, int(selected_id), excluded=False)
+                st.success(f"发票 #{selected_id} 已恢复")
+                st.rerun()
+        else:
+            if st.button("🚫 排除报销", use_container_width=True):
+                from invoice_clipper.database import update_invoice_status
+                update_invoice_status(db_path, int(selected_id), excluded=True)
+                st.success(f"发票 #{selected_id} 已排除")
+                st.rerun()
+    with bc3:
+        if st.button("🗑️ 删除发票", use_container_width=True, type="secondary"):
+            st.session_state[f"confirm_delete_{selected_id}"] = True
+
+    # 删除确认
+    if st.session_state.get(f"confirm_delete_{selected_id}"):
+        st.warning("删除后不可恢复，同时会删除该发票的所有附件。确认删除？")
+        cc1, cc2 = st.columns(2)
+        with cc1:
+            if st.button("✅ 确认删除", use_container_width=True):
+                import shutil
+                from invoice_clipper.database import delete_invoice, get_attachments
+                # 删除附件文件
+                for att in get_attachments(db_path, int(selected_id)):
+                    p = Path(att["stored_path"])
+                    if p.exists():
+                        p.unlink()
+                # 删除入库文件
+                stored = inv.get("stored_path", "")
+                if stored and Path(stored).exists():
+                    Path(stored).unlink()
+                # 清理空目录
+                att_dir = Path(inv.get("stored_path", "")).parent if stored else None
+                delete_invoice(db_path, int(selected_id))
+                if att_dir and att_dir.exists() and not any(att_dir.iterdir()):
+                    shutil.rmtree(att_dir, ignore_errors=True)
+                st.session_state.pop(f"confirm_delete_{selected_id}", None)
+                st.success(f"发票 #{selected_id} 已删除")
+                st.rerun()
+        with cc2:
+            if st.button("❌ 取消", use_container_width=True):
+                st.session_state.pop(f"confirm_delete_{selected_id}", None)
+                st.rerun()
+
+    # ── 附件管理 ──────────────────────────────────────────
+    st.markdown("---")
+    st.subheader("📎 附件管理")
+
+    from invoice_clipper.database import get_attachments, insert_attachment, delete_attachment
+    from invoice_clipper.file_utils import build_attachment_dir
+    import uuid
+
+    attachments = get_attachments(db_path, int(selected_id))
+    base_dir = Path(cfg["storage"]["base_dir"]).expanduser()
+
+    # 展示已有附件
+    if attachments:
+        cols = st.columns(min(len(attachments), 4))
+        for idx, att in enumerate(attachments):
+            att_path = Path(att["stored_path"])
+            with cols[idx % 4]:
+                suffix = att_path.suffix.lower()
+                if suffix in (".png", ".jpg", ".jpeg", ".bmp", ".webp"):
+                    try:
+                        st.image(str(att_path), caption=att["original_name"], use_container_width=True)
+                    except Exception:
+                        st.write(f"📄 {att['original_name']}")
+                elif suffix == ".pdf":
+                    st.write(f"📕 {att['original_name']}")
+                else:
+                    st.write(f"📄 {att['original_name']}")
+
+                type_label = {"payment": "付款记录", "receipt": "收据", "other": "其他"}.get(att.get("file_type", "other"), "其他")
+                st.caption(f"{type_label} | {att.get('file_size', 0) // 1024}KB")
+
+                if st.button(f"🗑️ 删除", key=f"del_att_{att['id']}"):
+                    if att_path.exists():
+                        att_path.unlink()
+                    delete_attachment(db_path, att["id"])
+                    st.success("附件已删除")
+                    st.rerun()
+    else:
+        st.caption("暂无附件")
+
+    # 上传新附件
+    st.markdown("**📤 上传附件**")
+    # 用递增计数器做 key 的一部分，上传后换 key 防止循环
+    up_counter = st.session_state.get(f"att_upcnt_{selected_id}", 0)
+    upload_col1, upload_col2 = st.columns([3, 1])
+    with upload_col1:
+        uploaded = st.file_uploader(
+            "选择文件（图片/PDF）",
+            type=["png", "jpg", "jpeg", "bmp", "pdf", "webp"],
+            accept_multiple_files=True,
+            key=f"att_upload_{selected_id}_v{up_counter}",
+            label_visibility="collapsed")
+    with upload_col2:
+        file_type = st.selectbox("文件类型", ["payment", "receipt", "other"],
+                                 format_func=lambda x: {"payment": "付款记录", "receipt": "收据", "other": "其他"}.get(x, x),
+                                 key=f"att_type_{selected_id}",
+                                 label_visibility="collapsed")
+
+    if uploaded:
+        att_dir = build_attachment_dir(base_dir, int(selected_id))
+        for uf in uploaded:
+            ext = Path(uf.name).suffix.lower() or ".bin"
+            safe_name = f"{uuid.uuid4().hex[:16]}{ext}"
+            dest = att_dir / safe_name
+            with open(dest, "wb") as fp:
+                fp.write(uf.getvalue())
+
+            insert_attachment(db_path, {
+                "invoice_id": int(selected_id),
+                "filename": safe_name,
+                "original_name": uf.name,
+                "file_type": file_type,
+                "stored_path": str(dest),
+                "file_size": len(uf.getvalue()),
+                "created_at": datetime.now().isoformat(),
+            })
+        # 递增计数器 → 下次渲染 uploader key 不同 → 自动清空
+        st.session_state[f"att_upcnt_{selected_id}"] = up_counter + 1
+        st.success(f"已上传 {len(uploaded)} 个附件")
+        st.rerun()
+
+    # 原始数据
+    with st.expander("📦 原始数据（JSON）"):
+        st.json(inv)
 
 # ─────────────────────────────────────────────────────────
 # 查询页

@@ -58,6 +58,22 @@ def init_db(db_path: str):
         conn.execute("CREATE INDEX IF NOT EXISTS idx_belong_project ON invoices(belong_project)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_belong_person ON invoices(belong_person)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_excluded ON invoices(excluded)")
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS attachments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                invoice_id INTEGER NOT NULL,
+                filename TEXT,
+                original_name TEXT,
+                file_type TEXT DEFAULT 'other',
+                stored_path TEXT,
+                file_size INTEGER DEFAULT 0,
+                created_at TEXT,
+                FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE CASCADE
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_att_invoice_id ON attachments(invoice_id)")
+        conn.execute("PRAGMA foreign_keys = ON")
         conn.commit()
     logger.info(f"数据库初始化完成: {db_path}")
 
@@ -213,3 +229,54 @@ def get_distinct_persons(db_path: str) -> List[str]:
 def exclude_invoice(db_path: str, invoice_id: int, excluded: bool = True):
     """标记发票为排除/恢复（别名，兼容旧调用）"""
     update_invoice_status(db_path, invoice_id, excluded)
+
+
+# ── 附件相关 ─────────────────────────────────────────────
+
+def get_attachments(db_path: str, invoice_id: int) -> List[dict]:
+    """获取某张发票的所有附件"""
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM attachments WHERE invoice_id=? ORDER BY created_at ASC",
+            (invoice_id,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def insert_attachment(db_path: str, attachment: dict) -> int:
+    """插入附件记录，返回自增ID"""
+    cols = ["invoice_id", "filename", "original_name", "file_type",
+            "stored_path", "file_size", "created_at"]
+    placeholders = ",".join(":" + c for c in cols)
+    with get_conn(db_path) as conn:
+        cur = conn.execute(
+            f"INSERT INTO attachments ({','.join(cols)}) VALUES ({placeholders})",
+            {k: v for k, v in attachment.items() if k in cols}
+        )
+        conn.commit()
+        return cur.lastrowid
+
+
+def delete_attachment(db_path: str, attachment_id: int) -> bool:
+    """删除单条附件记录"""
+    with get_conn(db_path) as conn:
+        cur = conn.execute("DELETE FROM attachments WHERE id=?", (attachment_id,))
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def delete_attachments_by_invoice(db_path: str, invoice_id: int) -> int:
+    """删除某发票的所有附件记录，返回删除数量"""
+    with get_conn(db_path) as conn:
+        cur = conn.execute("DELETE FROM attachments WHERE invoice_id=?", (invoice_id,))
+        conn.commit()
+        return cur.rowcount
+
+
+def delete_invoice(db_path: str, invoice_id: int) -> bool:
+    """删除发票及其附件记录"""
+    delete_attachments_by_invoice(db_path, invoice_id)
+    with get_conn(db_path) as conn:
+        cur = conn.execute("DELETE FROM invoices WHERE id=?", (invoice_id,))
+        conn.commit()
+        return cur.rowcount > 0
