@@ -368,20 +368,27 @@ class BaiduOCREngine(BaseEngine):
         计算置信度，基于关键字段是否齐全
         必需字段：发票号码、价税合计、开票日期、销售方名称
         """
+        def _has_value(val) -> bool:
+            if val is None:
+                return False
+            if isinstance(val, str) and not val.strip():
+                return False
+            return True
+
         required = ["invoice_number", "amount_with_tax", "invoice_date", "seller_name"]
-        present = sum(1 for f in required if fields.get(f))
+        present = sum(1 for f in required if _has_value(fields.get(f)))
 
         base = present / len(required)
 
         # 额外加分：有税号、商品名称等
         bonus = 0
-        if fields.get("buyer_tax_num"):
+        if _has_value(fields.get("buyer_tax_num")):
             bonus += 0.05
-        if fields.get("seller_tax_num"):
+        if _has_value(fields.get("seller_tax_num")):
             bonus += 0.05
-        if fields.get("commodity_name"):
+        if _has_value(fields.get("commodity_name")):
             bonus += 0.05
-        if fields.get("tax_rate"):
+        if fields.get("tax_rate") is not None:
             bonus += 0.05
 
         confidence = min(1.0, base + bonus)

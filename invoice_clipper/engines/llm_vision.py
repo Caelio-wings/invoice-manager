@@ -79,8 +79,12 @@ class LLMVisionEngine(BaseEngine):
             # 准备图片 Base64
             if suffix == ".pdf":
                 img_bytes = self._pdf_to_image(file_path)
+                mime_type = "image/png"
             elif suffix in (".png", ".jpg", ".jpeg", ".bmp", ".webp"):
                 img_bytes = Path(file_path).read_bytes()
+                mime_map = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                            ".bmp": "image/bmp", ".webp": "image/webp"}
+                mime_type = mime_map.get(suffix, "image/png")
             else:
                 return EngineResult(
                     data=None,
@@ -100,7 +104,7 @@ class LLMVisionEngine(BaseEngine):
             b64_image = base64.b64encode(img_bytes).decode("utf-8")
 
             # 调用 LLM API
-            response_text = self._call_llm_api(b64_image)
+            response_text = self._call_llm_api(b64_image, mime_type)
             if not response_text:
                 return EngineResult(
                     data=None,
@@ -112,12 +116,13 @@ class LLMVisionEngine(BaseEngine):
             # 解析 JSON
             data = self._parse_json(response_text)
             if not data:
+                preview = response_text[:300].replace("\n", " ")
                 return EngineResult(
                     data=None,
                     confidence=0,
                     engine=self.name,
                     raw_text=response_text,
-                    error="JSON 解析失败",
+                    error=f"JSON 解析失败，原始响应: {preview}",
                 )
 
             # 后处理
@@ -142,7 +147,7 @@ class LLMVisionEngine(BaseEngine):
                 error=f"识别异常: {e}",
             )
 
-    def _call_llm_api(self, b64_image: str) -> Optional[str]:
+    def _call_llm_api(self, b64_image: str, mime_type: str = "image/png") -> Optional[str]:
         """调用 OpenAI 兼容的 Vision API"""
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -157,7 +162,7 @@ class LLMVisionEngine(BaseEngine):
                     {"type": "text", "text": self.prompt_template},
                     {
                         "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{b64_image}"},
+                        "image_url": {"url": f"data:{mime_type};base64,{b64_image}"},
                     },
                 ],
             }
@@ -179,11 +184,12 @@ class LLMVisionEngine(BaseEngine):
             )
 
             if resp.status_code != 200:
-                logger.error(f"LLM API 返回 HTTP {resp.status_code}: {resp.text}")
+                logger.error(f"LLM API 返回 HTTP {resp.status_code}: {resp.text[:500]}")
                 return None
 
             result = resp.json()
             content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+            logger.debug(f"LLM 原始响应 (前500字符): {content[:500]}")
             return content
 
         except httpx.TimeoutException:
@@ -335,18 +341,26 @@ class LLMVisionEngine(BaseEngine):
         """
         计算置信度，基于关键字段是否齐全
         """
+        def _has_value(val) -> bool:
+            """检查字段是否有有效值（排除 None、空字符串）"""
+            if val is None:
+                return False
+            if isinstance(val, str) and not val.strip():
+                return False
+            return True
+
         required = ["invoice_number", "amount_with_tax", "invoice_date", "seller_name"]
-        present = sum(1 for f in required if fields.get(f))
+        present = sum(1 for f in required if _has_value(fields.get(f)))
 
         base = present / len(required)
 
         # 额外加分
         bonus = 0
-        if fields.get("buyer_tax_num"):
+        if _has_value(fields.get("buyer_tax_num")):
             bonus += 0.05
-        if fields.get("seller_tax_num"):
+        if _has_value(fields.get("seller_tax_num")):
             bonus += 0.05
-        if fields.get("commodity_name"):
+        if _has_value(fields.get("commodity_name")):
             bonus += 0.05
         if fields.get("tax_rate") is not None:
             bonus += 0.05

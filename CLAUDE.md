@@ -1,0 +1,78 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Commands
+
+```bash
+# Web UI (primary interface)
+streamlit run app.py                    # http://localhost:8501
+
+# CLI
+python main.py scan                     # Scan configured watch_dirs for new invoices
+python main.py list                     # List all invoices in DB
+python main.py query --from 2025-03-01 --to 2025-03-31 --seller "科技公司"
+python main.py process /path/to/invoice.pdf  # Process a single file
+python main.py export --from 2025-03-01 --to 2025-03-31 --format both
+python main.py exclude 3                # Mark invoice #3 as non-reimbursable
+python main.py include 3                # Restore invoice #3 as reimbursable
+
+# Install
+pip install -r requirements.txt
+```
+
+No test suite exists for this project.
+
+## Architecture
+
+**Dual entry points**: `app.py` (Streamlit Web UI) and `main.py` (CLI with argparse subcommands). Both load `config/config.yaml` and delegate to `invoice_clipper/`.
+
+**Processing pipeline** (`invoice_clipper/processor.py` — `InvoiceProcessor.process_file()`):
+1. Preprocess: OFD → PDF conversion if needed
+2. Content pre-check: extract PDF text, look for invoice keywords (non-blocking)
+3. Recognition: cascade through engines in priority order until one returns `is_valid`
+4. Dedup check: reject if invoice_number + amount or invoice_number alone already exists
+5. Archive: move file to `{base_dir}/{year}/{date}_{amount}_{seller}_{inv_no}.pdf`
+6. DB insert: build record and insert into SQLite
+
+**Recognition engines** (`invoice_clipper/engines/`):
+- All inherit from `BaseEngine` and return `EngineResult` (data dict, confidence 0-1, error)
+- `EngineResult.is_valid` requires confidence ≥ 0.6 AND presence of `invoice_number` and `amount_with_tax`
+- Priority order (sorted by `engine.priority`): TextOCR (1) → Baidu OCR (1) → LLM Vision (2)
+- TextOCR/baidu both have priority=1 but TextOCR registers first; whichever engine is available and enabled runs first
+- Each engine has `enabled` toggle in `config.yaml`
+
+**Database** (`invoice_clipper/database.py`):
+- Single table `invoices` in SQLite, path from config `storage.db_path`
+- Key columns: `invoice_number`, `invoice_code`, `invoice_date`, `commodity_name`, `specification_model`, `buyer_name`/`buyer_tax_num`, `seller_name`/`seller_tax_num`, `tax_rate`, `tax_amount`, `amount_with_tax`, `category`, `belong_project`, `belong_person`, `remark`, `excluded`, `stored_path`
+- `query_invoices()` supports filters: date_from/to, seller/buyer (LIKE), project/person (exact), only_included
+
+**Export** (`invoice_clipper/exporter.py`):
+- `export_excel()`: styled Excel with frozen header, alternating row colors, summary row
+- `export_merged_pdf()`: merges stored PDFs via PyMuPDF
+- `build_export_label()`: generates filename label from filter criteria
+
+**File utilities** (`invoice_clipper/file_utils.py`):
+- `ofd_to_pdf()`: tries easyofd library first, falls back to ofd2pdf CLI; copies to temp dir to avoid non-ASCII path issues
+- `build_archive_path()`: `{base_dir}/{year}/{date}_{amount}_{seller}_{inv_no_short}.pdf`
+- `archive_invoice()`: moves file, handles name conflicts with `_01` suffix
+
+## Adding a new recognition engine
+
+1. Create `invoice_clipper/engines/my_engine.py`, subclass `BaseEngine`, implement `is_available()`, `extract(file_path)`
+2. Export it in `engines/__init__.py`
+3. Register in `InvoiceProcessor._init_engines()` in `processor.py`
+
+## Adding a new DB field
+
+1. `database.py`: add column to `init_db()` CREATE TABLE and `insert_invoice()` col list
+2. `processor.py`: add field mapping in `_build_record()`
+3. `app.py`: add column to DataFrame and edit form in `page_list()`, plus `page_query()` if needed
+
+## Conventions
+
+- All file I/O uses `encoding='utf-8'`
+- All paths use `pathlib.Path` with `.expanduser()` for `~` resolution
+- Temp files use `tempfile.gettempdir()`, never hardcoded `/tmp` (Windows compat)
+- OFD→PDF conversion copies to temp dir first to avoid easyofd's non-ASCII path bug
+- Config loaded via `yaml.safe_load()`; CLI and Web UI each load it independently

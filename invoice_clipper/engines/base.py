@@ -33,9 +33,11 @@ class EngineResult:
         """
         if self.data is None:
             return False
-        if not self.data.get("invoice_number"):
+        inv_num = self.data.get("invoice_number")
+        if inv_num is None or (isinstance(inv_num, str) and not inv_num.strip()):
             return False
-        if not self.data.get("amount_with_tax"):
+        amount = self.data.get("amount_with_tax")
+        if amount is None:
             return False
         return self.confidence >= CONFIDENCE_THRESHOLD
 

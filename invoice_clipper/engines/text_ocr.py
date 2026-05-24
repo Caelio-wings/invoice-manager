@@ -344,14 +344,21 @@ class TextOCREngine(BaseEngine):
         return fields
 
     def _calculate_confidence(self, fields: Dict[str, Any]) -> float:
+        def _has_value(val) -> bool:
+            if val is None:
+                return False
+            if isinstance(val, str) and not val.strip():
+                return False
+            return True
+
         required = ['invoice_number', 'amount_with_tax', 'invoice_date', 'seller_name']
-        present = sum(1 for f in required if fields.get(f))
+        present = sum(1 for f in required if _has_value(fields.get(f)))
         base = present / len(required)
         bonus = 0.0
-        if fields.get('buyer_tax_num'):
+        if _has_value(fields.get('buyer_tax_num')):
             bonus += 0.05
-        if fields.get('seller_tax_num'):
+        if _has_value(fields.get('seller_tax_num')):
             bonus += 0.05
-        if fields.get('commodity_name'):
+        if _has_value(fields.get('commodity_name')):
             bonus += 0.05
         return min(1.0, base + bonus)
