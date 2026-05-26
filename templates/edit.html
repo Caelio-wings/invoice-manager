@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="page-header">
+  <h1>编辑发票 #{{ invoice.id }}</h1>
+  <div class="btn-group">
+    <form method="POST" action="/list/{{ invoice.id }}/toggle" style="display:inline;">
+      <button type="submit" class="btn btn-outline">
+        {{ '恢复为正常' if invoice.excluded else '标记为排除' }}
+      </button>
+    </form>
+    <form method="POST" action="/list/{{ invoice.id }}/delete" style="display:inline;" onsubmit="return confirm('确认删除 #{{ invoice.id }}？删除后不可恢复，附件也会一并删除。')">
+      <button type="submit" class="btn btn-danger">删除发票</button>
+    </form>
+    <a href="/list" class="btn btn-outline">返回列表</a>
+  </div>
+</div>
+
+<!-- Edit Form -->
+<form method="POST" action="/list/{{ invoice.id }}">
+<div class="edit-grid">
+
+  <!-- Column 1 -->
+  <div>
+    <div class="edit-section-title">基本发票信息</div>
+    <div class="form-group"><label>发票号码</label><input type="text" name="invoice_number" value="{{ invoice.invoice_number or '' }}"></div>
+    <div class="form-group"><label>发票代码</label><input type="text" name="invoice_code" value="{{ invoice.invoice_code or '' }}"></div>
+    <div class="form-group"><label>开票日期</label><input type="text" name="invoice_date" value="{{ invoice.invoice_date or '' }}" placeholder="YYYY-MM-DD"></div>
+    <div class="form-group"><label>项目名称</label><input type="text" name="commodity_name" value="{{ invoice.commodity_name or '' }}"></div>
+    <div class="form-group"><label>规格型号</label><input type="text" name="specification_model" value="{{ invoice.specification_model or '' }}"></div>
+    <div class="form-group"><label>分类</label><input type="text" name="category" value="{{ invoice.category or '' }}"></div>
+  </div>
+
+  <!-- Column 2 -->
+  <div>
+    <div class="edit-section-title">购销方信息</div>
+    <div class="form-group"><label>购买方名称</label><input type="text" name="buyer_name" value="{{ invoice.buyer_name or '' }}"></div>
+    <div class="form-group"><label>购买方税号</label><input type="text" name="buyer_tax_num" value="{{ invoice.buyer_tax_num or '' }}"></div>
+    <div class="form-group"><label>销售方名称</label><input type="text" name="seller_name" value="{{ invoice.seller_name or '' }}"></div>
+    <div class="form-group"><label>销售方税号</label><input type="text" name="seller_tax_num" value="{{ invoice.seller_tax_num or '' }}"></div>
+  </div>
+
+  <!-- Column 3 -->
+  <div>
+    <div class="edit-section-title">金额与归属</div>
+    <div class="form-group"><label>价税合计</label><input type="number" step="0.01" name="amount_with_tax" value="{{ invoice.amount_with_tax or 0 }}"></div>
+    <div class="form-group"><label>税额</label><input type="number" step="0.01" name="tax_amount" value="{{ invoice.tax_amount or 0 }}"></div>
+    <div class="form-group"><label>税率</label><input type="number" step="0.0001" name="tax_rate" value="{{ invoice.tax_rate or 0 }}"></div>
+    <div class="form-group"><label>归属项目</label><input type="text" name="belong_project" value="{{ invoice.belong_project or '' }}"></div>
+    <div class="form-group"><label>归属人</label><input type="text" name="belong_person" value="{{ invoice.belong_person or '' }}"></div>
+    <div class="form-group"><label>备注</label><input type="text" name="remark" value="{{ invoice.remark or '' }}"></div>
+  </div>
+
+</div>
+<button type="submit" class="btn btn-primary">保存修改</button>
+</form>
+
+<!-- Attachments -->
+<div class="card" style="margin-top: 16px;">
+  <h3>附件 ({{ attachments | length }})</h3>
+
+  {% if attachments %}
+  <div class="att-grid">
+    {% for att in attachments %}
+    <div class="att-card">
+      {% set is_img = att.filename and (att.filename.lower().endswith('.png') or att.filename.lower().endswith('.jpg') or att.filename.lower().endswith('.jpeg') or att.filename.lower().endswith('.bmp') or att.filename.lower().endswith('.webp')) %}
+      {% if is_img %}
+      <img src="/static/file-icon.svg" alt="" onerror="this.style.display='none'">
+      <div class="att-icon">{{ att.filename.split('.')[-1].upper() }}</div>
+      {% else %}
+      <div class="att-icon">{{ 'PDF' if att.filename and att.filename.lower().endswith('.pdf') else 'FILE' }}</div>
+      {% endif %}
+      <div class="att-info">
+        <div class="att-name">{{ att.original_name or att.filename }}</div>
+        <div>{{ att.file_type }} | {{ "%.0f" | format((att.file_size or 0) / 1024) }} KB</div>
+      </div>
+      <div class="att-actions">
+        <form method="POST" action="/list/{{ invoice.id }}/attachments/{{ att.id }}/delete" onsubmit="return confirm('确认删除此附件？')">
+          <button type="submit" class="btn btn-danger" style="font-size: 0.75rem; padding: 3px 10px;">删除</button>
+        </form>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p style="color: #999; font-size: 0.85rem;">暂未上传附件</p>
+  {% endif %}
+
+  {% if invoice.stored_path %}
+  <form method="POST" action="/list/{{ invoice.id }}/attachments" enctype="multipart/form-data" style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #eee;">
+    <div class="form-row">
+      <div class="form-group">
+        <input type="file" name="files" multiple>
+      </div>
+      <div class="form-group">
+        <select name="file_type">
+          <option value="other">其他</option>
+          <option value="payment">付款凭证</option>
+          <option value="receipt">收款凭证</option>
+        </select>
+      </div>
+      <button type="submit" class="btn btn-primary">上传附件</button>
+    </div>
+  </form>
+  {% else %}
+  <p style="color: #999; font-size: 0.8rem; margin-top: 8px;">发票归档后才可上传附件</p>
+  {% endif %}
+</div>
+
+<!-- Raw Data -->
+<details>
+  <summary>原始数据 (JSON)</summary>
+  <pre>{{ raw_json }}</pre>
+</details>
+
+{% endblock %}

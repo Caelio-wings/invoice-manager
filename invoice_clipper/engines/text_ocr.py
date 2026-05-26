@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 
 from .base import BaseEngine, EngineResult
+from ._utils import normalize_date, infer_category, calculate_confidence
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +78,7 @@ class TextOCREngine(BaseEngine):
             fields = self._post_process(fields)
 
             # 4. 计算置信度
-            confidence = self._calculate_confidence(fields)
+            confidence = calculate_confidence(fields)
 
             return EngineResult(
                 data=fields,
@@ -174,7 +175,7 @@ class TextOCREngine(BaseEngine):
             r'开票日期[：:]\s*(\d{4}-\d{1,2}-\d{1,2})',
         ]
         date_str = self._try_patterns(patterns_date, text, flags)
-        info['invoice_date'] = self._normalize_date(date_str) if date_str else ''
+        info['invoice_date'] = normalize_date(date_str) if date_str else ''
 
         # 购买方名称
         patterns_buyer = [
@@ -265,30 +266,9 @@ class TextOCREngine(BaseEngine):
             info['amount_with_tax'] = 0.0
 
         # 分类推断
-        info['category'] = self._infer_category(info.get('seller_name', ''))
+        info['category'] = infer_category(info.get('seller_name', ''))
 
         return info
-
-    def _normalize_date(self, date_str: str) -> str:
-        """将中文日期格式转换为 YYYY-MM-DD"""
-        if not date_str:
-            return ""
-
-        # 去除所有空格
-        date_str = re.sub(r'\s+', '', date_str)
-
-        # 匹配 "2026年03月14日" 格式
-        m = re.search(r'(\d{4})年(\d{1,2})月(\d{1,2})日', date_str)
-        if m:
-            return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
-
-        # 匹配 "2026-03-14" 格式（已经标准）
-        m = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', date_str)
-        if m:
-            return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
-
-        # 其他格式可在此扩展
-        return date_str
 
     def _try_patterns(self, patterns, text, flags):
         for p in patterns:
@@ -319,21 +299,6 @@ class TextOCREngine(BaseEngine):
                         return m.group(group).strip()
         return '未识别'
 
-    def _infer_category(self, seller_name: str) -> str:
-        text = seller_name.lower()
-        if any(k in text for k in ["餐饮", "餐厅", "饭店"]):
-            return "餐饮"
-        elif any(k in text for k in ["交通", "运输", "通行", "机票", "火车"]):
-            return "交通"
-        elif any(k in text for k in ["住宿", "酒店", "宾馆"]):
-            return "住宿"
-        elif any(k in text for k in ["办公", "文具", "打印"]):
-            return "办公"
-        elif any(k in text for k in ["服务", "咨询", "代理"]):
-            return "服务"
-        else:
-            return "其他"
-
     def _post_process(self, fields: Dict[str, Any]) -> Dict[str, Any]:
         # 确保金额类型正确
         for k in ['tax_amount', 'amount_with_tax']:
@@ -343,22 +308,3 @@ class TextOCREngine(BaseEngine):
             fields['tax_rate'] = None
         return fields
 
-    def _calculate_confidence(self, fields: Dict[str, Any]) -> float:
-        def _has_value(val) -> bool:
-            if val is None:
-                return False
-            if isinstance(val, str) and not val.strip():
-                return False
-            return True
-
-        required = ['invoice_number', 'amount_with_tax', 'invoice_date', 'seller_name']
-        present = sum(1 for f in required if _has_value(fields.get(f)))
-        base = present / len(required)
-        bonus = 0.0
-        if _has_value(fields.get('buyer_tax_num')):
-            bonus += 0.05
-        if _has_value(fields.get('seller_tax_num')):
-            bonus += 0.05
-        if _has_value(fields.get('commodity_name')):
-            bonus += 0.05
-        return min(1.0, base + bonus)

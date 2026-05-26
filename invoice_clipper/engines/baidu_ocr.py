@@ -5,15 +5,14 @@
 import base64
 import json
 import logging
-import re
 import time
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple
 
 import httpx
-import fitz
 
 from .base import BaseEngine, EngineResult
+from ._utils import pdf_to_image, normalize_date, parse_number, infer_category, calculate_confidence
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +123,7 @@ class BaiduOCREngine(BaseEngine):
         """处理 PDF 文件（转图片后调用 API）"""
         try:
             # 将 PDF 第一页转为 PNG 图片
-            img_bytes = self._pdf_to_image(pdf_path)
+            img_bytes = pdf_to_image(pdf_path, dpi=300)
             if not img_bytes:
                 return EngineResult(
                     data=None,
@@ -202,7 +201,7 @@ class BaiduOCREngine(BaseEngine):
             raw_json = json.dumps(result, ensure_ascii=False)
 
             # 计算置信度（基于关键字段是否齐全）
-            confidence = self._calculate_confidence(fields)
+            confidence = calculate_confidence(fields)
 
             return EngineResult(
                 data=fields,
@@ -219,19 +218,6 @@ class BaiduOCREngine(BaseEngine):
                 engine=self.name,
                 error=f"API 调用异常: {e}",
             )
-
-    def _pdf_to_image(self, pdf_path: str, dpi: int = 300) -> Optional[bytes]:
-        """将 PDF 第一页转为 PNG 图片"""
-        try:
-            doc = fitz.open(pdf_path)
-            page = doc[0]
-            pix = page.get_pixmap(dpi=dpi)
-            img_bytes = pix.tobytes("png")
-            doc.close()
-            return img_bytes
-        except Exception as e:
-            logger.error(f"PDF 转图片失败: {e}")
-            return None
 
     def _map_fields(self, wr: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -274,13 +260,13 @@ class BaiduOCREngine(BaseEngine):
         # 发票分类判断
         service_type = wr.get("ServiceType", "")
         invoice_type = wr.get("InvoiceType", "")
-        category = self._infer_category(service_type, invoice_type)
+        category = infer_category(f"{service_type} {invoice_type}")
 
         fields = {
             # 发票基础信息
             "invoice_number": wr.get("InvoiceNum", ""),
             "invoice_code": wr.get("InvoiceCode", ""),
-            "invoice_date": self._normalize_date(wr.get("InvoiceDate", "")),
+            "invoice_date": normalize_date(wr.get("InvoiceDate", "")),
 
             # 商品信息（取第一项）
             "commodity_name": _first_word(wr.get("CommodityName", [])),
@@ -297,7 +283,7 @@ class BaiduOCREngine(BaseEngine):
             # 金额与税率
             "tax_rate": _parse_tax_rate(wr.get("CommodityTaxRate", [])),
             "tax_amount": _first_float(wr.get("CommodityTax", []), 0.0),
-            "amount_with_tax": self._parse_amount(wr.get("AmountInFiguers", 0)),
+            "amount_with_tax": parse_number(wr.get("AmountInFiguers", 0)) or 0.0,
 
             # 分类
             "category": category,
@@ -305,91 +291,7 @@ class BaiduOCREngine(BaseEngine):
 
         # 如果没有单独的商品税额，尝试从合计税额获取
         if fields["tax_amount"] == 0:
-            fields["tax_amount"] = self._parse_amount(wr.get("TotalTax", 0))
+            fields["tax_amount"] = parse_number(wr.get("TotalTax", 0)) or 0.0
 
         return fields
 
-    def _normalize_date(self, date_str: str) -> str:
-        """标准化日期格式为 YYYY-MM-DD"""
-        if not date_str:
-            return ""
-
-        # 处理 "2016年06月02日" 格式
-        m = re.search(r"(\d{4})年(\d{1,2})月(\d{1,2})日", date_str)
-        if m:
-            return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
-
-        # 处理 "2016-06-02" 格式
-        m = re.search(r"(\d{4})-(\d{1,2})-(\d{1,2})", date_str)
-        if m:
-            return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
-
-        # 处理 "2016/06/02" 格式
-        m = re.search(r"(\d{4})/(\d{1,2})/(\d{1,2})", date_str)
-        if m:
-            return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
-
-        return date_str
-
-    def _parse_amount(self, amount) -> float:
-        """解析金额字符串为浮点数"""
-        if amount is None:
-            return 0.0
-        if isinstance(amount, (int, float)):
-            return float(amount)
-        if isinstance(amount, str):
-            try:
-                return float(amount.replace(",", "").strip())
-            except ValueError:
-                return 0.0
-        return 0.0
-
-    def _infer_category(self, service_type: str, invoice_type: str) -> str:
-        """根据服务类型推断发票分类"""
-        text = f"{service_type} {invoice_type}".lower()
-
-        if any(k in text for k in ["餐饮", "餐厅", "饭店", "食堂"]):
-            return "餐饮"
-        elif any(k in text for k in ["交通", "运输", "通行", "机票", "火车"]):
-            return "交通"
-        elif any(k in text for k in ["住宿", "酒店", "宾馆", "旅馆"]):
-            return "住宿"
-        elif any(k in text for k in ["办公", "文具", "打印", "复印", "耗材"]):
-            return "办公"
-        elif any(k in text for k in ["服务", "咨询", "代理", "顾问", "设计"]):
-            return "服务"
-        elif any(k in text for k in ["通讯", "通信", "电话", "宽带"]):
-            return "通讯"
-        else:
-            return "其他"
-
-    def _calculate_confidence(self, fields: Dict[str, Any]) -> float:
-        """
-        计算置信度，基于关键字段是否齐全
-        必需字段：发票号码、价税合计、开票日期、销售方名称
-        """
-        def _has_value(val) -> bool:
-            if val is None:
-                return False
-            if isinstance(val, str) and not val.strip():
-                return False
-            return True
-
-        required = ["invoice_number", "amount_with_tax", "invoice_date", "seller_name"]
-        present = sum(1 for f in required if _has_value(fields.get(f)))
-
-        base = present / len(required)
-
-        # 额外加分：有税号、商品名称等
-        bonus = 0
-        if _has_value(fields.get("buyer_tax_num")):
-            bonus += 0.05
-        if _has_value(fields.get("seller_tax_num")):
-            bonus += 0.05
-        if _has_value(fields.get("commodity_name")):
-            bonus += 0.05
-        if fields.get("tax_rate") is not None:
-            bonus += 0.05
-
-        confidence = min(1.0, base + bonus)
-        return confidence

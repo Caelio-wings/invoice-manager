@@ -1,5 +1,6 @@
 venv/
+.venv/
 __pycache__
 *.pyc
-*.1og
+*.log
 config.yaml

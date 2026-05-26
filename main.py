@@ -8,7 +8,8 @@ import logging
 import sys
 from pathlib import Path
 from datetime import datetime
-import yaml
+
+from invoice_clipper import load_config
 
 logging.basicConfig(
     level=logging.INFO,
@@ -16,16 +17,6 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger(__name__)
-
-
-def load_config() -> dict:
-    cfg_path = Path(__file__).parent / "config" / "config.yaml"
-    if not cfg_path.exists():
-        logger.error(f"配置文件不存在: {cfg_path}")
-        sys.exit(1)
-    # ✅ 指定 encoding='utf-8'
-    with open(cfg_path, encoding='utf-8') as f:
-        return yaml.safe_load(f)
 
 def cmd_scan(config: dict) -> str:
     """扫描监控目录"""

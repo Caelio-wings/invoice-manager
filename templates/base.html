@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>发票夹子 v3.0</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <h2>发票夹子</h2>
+    <nav>
+      <a href="/scan"  class="{{ 'active' if page == 'scan' else '' }}">扫描发票</a>
+      <a href="/list"  class="{{ 'active' if page == 'list' else '' }}">发票列表</a>
+      <a href="/query" class="{{ 'active' if page == 'query' else '' }}">查询筛选</a>
+      <a href="/export" class="{{ 'active' if page == 'export' else '' }}">导出报销</a>
+    </nav>
+    <div class="sidebar-footer">v3.0 | 发票管理专用</div>
+  </aside>
+  <main class="content">
+    {% if message %}
+    <div class="flash {{ msg_type }}">{{ message }}</div>
+    {% endif %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

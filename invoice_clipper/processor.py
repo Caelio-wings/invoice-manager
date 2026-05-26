@@ -81,9 +81,6 @@ class InvoiceProcessor:
         返回入库记录字典，失败返回 None
         """
         file_path = Path(file_path)
-        # if not file_path.exists():
-        #     logger.error(f"文件不存在: {file_path}")
-        #     return None
 
         suffix = file_path.suffix.lower()
         if suffix not in [".pdf", ".ofd", ".png", ".jpg", ".jpeg", ".bmp", ".tiff"]:

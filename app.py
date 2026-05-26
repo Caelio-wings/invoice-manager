@@ -1,561 +1,411 @@
 #!/usr/bin/env python3
-"""发票夹子 Web UI - Streamlit版本 (v2.0 重构版)"""
-import streamlit as st
-import pandas as pd
+"""发票夹子 Web UI — FastAPI + Jinja2 (v3.0)"""
+import re
+import json
+import shutil
+import tempfile
 from pathlib import Path
 from datetime import datetime
-import yaml
-import tempfile
 
-st.set_page_config(page_title="发票夹子", page_icon="📎", layout="wide")
+from fastapi import FastAPI, Request, Form, File, UploadFile, Query, HTTPException
+from fastapi.responses import RedirectResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 
-# ─────────────────────────────────────────────────────────
-# 配置加载
-# ─────────────────────────────────────────────────────────
-@st.cache_resource
-def load_config():
-    cfg = Path(__file__).parent / "config" / "config.yaml"
-    if not cfg.exists():
-        st.error("配置文件不存在，请先配置 config.yaml")
-        st.stop()
-    with open(cfg, encoding='utf-8') as f:
-        return yaml.safe_load(f)
+from invoice_clipper import (
+    load_config, init_db, query_invoices, update_invoice_status, update_invoice,
+    get_invoice_by_id, get_all_invoices, delete_invoice,
+    get_attachments, insert_attachment, delete_attachment,
+    InvoiceProcessor, export_excel, export_merged_pdf, build_export_label,
+    build_attachment_path, next_attachment_seq,
+)
 
-def get_db_path(cfg):
+BASE_DIR = Path(__file__).parent
+app = FastAPI(title="发票夹子", version="3.0")
+app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
+
+@app.on_event("startup")
+def startup():
+    app.state.config = load_config()
+    db_path = str(Path(app.state.config["storage"]["db_path"]).expanduser().resolve())
+    init_db(db_path)
+
+
+def get_db_path(cfg: dict) -> Path:
     return Path(cfg["storage"]["db_path"]).expanduser().resolve()
 
-def get_invoice_count(cfg):
-    invs = load_invoices(cfg, {"only_included": False})
-    total = len(invs)
-    reimbursable = sum(1 for i in invs if not i.get("excluded"))
-    return total, reimbursable, total - reimbursable
 
-@st.cache_data(ttl=30)
-def load_invoices(cfg, filters=None):
-    from invoice_clipper.database import query_invoices as _q
-    return _q(str(get_db_path(cfg)), filters or {})
+def db(cfg: dict) -> str:
+    return str(get_db_path(cfg))
 
-def sidebar_nav():
-    st.sidebar.title("📎 发票夹子")
-    st.sidebar.markdown("---")
-    page = st.sidebar.radio("功能菜单",
-        ["📤 扫描发票", "📋 发票列表", "🔍 查询筛选", "📥 导出报销"],
-        label_visibility="collapsed")
-    st.sidebar.markdown("---")
-    st.sidebar.caption("v2.0 | 发票管理专用")
-    return page
 
-# ─────────────────────────────────────────────────────────
-# 扫描页
-# ─────────────────────────────────────────────────────────
-def page_scan(cfg):
-    st.header("📤 扫描发票")
-    st.markdown("上传 PDF 或图片文件，自动识别发票信息（百度OCR → LLM 两级识别）。")
+# ── Helpers ───────────────────────────────────────
+def flash_redirect(url: str, message: str, msg_type: str = "success") -> RedirectResponse:
+    return RedirectResponse(f"{url}?message={message}&msg_type={msg_type}", status_code=303)
 
-    files = st.file_uploader(
-        "拖拽文件到此处，或点击选择",
-        type=["pdf", "png", "jpg", "jpeg", "bmp", "tiff", "ofd"],
-        accept_multiple_files=True)
 
-    if not files:
-        return
+def get_flash(request: Request) -> dict:
+    return {
+        "message": request.query_params.get("message"),
+        "msg_type": request.query_params.get("msg_type", "success"),
+    }
 
-    st.markdown("---")
-    st.subheader("识别结果")
-    from invoice_clipper.processor import InvoiceProcessor
+
+INVOICE_FIELDS = [
+    "invoice_number", "invoice_code", "invoice_date",
+    "commodity_name", "specification_model", "category",
+    "buyer_name", "buyer_tax_num", "seller_name", "seller_tax_num",
+    "amount_with_tax", "tax_amount", "tax_rate",
+    "belong_project", "belong_person", "remark",
+]
+
+
+def build_filters(request: Request) -> dict:
+    f = {}
+    for key in ("date_from", "date_to", "seller", "buyer", "project", "person"):
+        val = request.query_params.get(key)
+        if val:
+            f[key] = val
+    return f
+
+
+# ── Routes ────────────────────────────────────────
+
+@app.get("/")
+def root():
+    return RedirectResponse("/list", status_code=303)
+
+
+@app.get("/scan")
+def get_scan(request: Request):
+    ctx = get_flash(request)
+    ctx.update({"page": "scan", "results": None, "summary": None})
+    return templates.TemplateResponse(request, "scan.html", ctx)
+
+
+@app.post("/scan")
+async def post_scan(request: Request, files: list[UploadFile] = File(...)):
+    cfg = request.app.state.config
     proc = InvoiceProcessor(cfg)
     results = []
-    bar = st.progress(0)
-    status_text = st.empty()
 
-    for idx, f in enumerate(files):
-        bar.progress((idx + 1) / len(files))
-        status_text.text(f"正在处理: {f.name}")
-        tmp_dir = Path(tempfile.gettempdir())
-        safe_name = f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{f.name}"
-        tmp = tmp_dir / safe_name
-
+    for f in files:
+        safe_name = f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{f.filename or 'upload'}"
+        tmp = Path(tempfile.gettempdir()) / safe_name
+        content = await f.read()
         with open(tmp, "wb") as fp:
-            fp.write(f.getvalue())
+            fp.write(content)
 
         r = proc.process_file(tmp, source="web")
-        if r:
-            results.append({
-                "ID": r.get("id", "?"),
-                "文件名": f.name,
-                "状态": "✅ 成功",
-                "发票号码": r.get("invoice_number", "-"),
-                "开票日期": r.get("invoice_date", "-"),
-                "销售方": r.get("seller_name", "-"),
-                "价税合计": f"¥{r.get('amount_with_tax', 0):,.2f}",
-            })
-        else:
-            results.append({
-                "ID": "-", "文件名": f.name, "状态": "❌ 失败",
-                "发票号码": "-", "开票日期": "-", "销售方": "-",
-                "价税合计": "-",
-            })
+        results.append({
+            "id": r.get("id", "?") if r else "?",
+            "filename": f.filename or "-",
+            "ok": r is not None,
+            "invoice_number": r.get("invoice_number", "-") if r else "-",
+            "invoice_date": r.get("invoice_date", "-") if r else "-",
+            "seller_name": r.get("seller_name", "-") if r else "-",
+            "amount_with_tax": r.get("amount_with_tax", 0) if r else 0,
+        })
         if tmp.exists():
             tmp.unlink()
 
-    bar.empty()
-    status_text.empty()
+    ok_count = sum(1 for r in results if r["ok"])
+    ctx = get_flash(request)
+    ctx.update({
+        "page": "scan",
+        "results": results,
+        "summary": {"ok_count": ok_count, "total_count": len(results)},
+    })
+    return templates.TemplateResponse(request, "scan.html", ctx)
 
-    if not results:
-        return
 
-    for r in results:
-        with st.expander(
-            f"{r['状态']} | {r['文件名']} | 发票号码: {r['发票号码']} | 金额: {r['价税合计']}",
-            expanded=(r["状态"] == "❌ 失败")):
-            st.json(r)
+@app.get("/list")
+def get_list(request: Request, search: str = "", status: list[str] = Query(default=["正常"])):
+    cfg = request.app.state.config
+    invoices = get_all_invoices(db(cfg))
+    invoices.sort(key=lambda i: i.get("invoice_date") or "", reverse=True)
 
-    ok = sum(1 for r in results if r["状态"] == "✅ 成功")
-    st.success(f"处理完成：{ok}/{len(results)} 张识别成功")
+    show_normal = "正常" in status
+    show_excluded = "排除" in status
+    if show_normal and not show_excluded:
+        invoices = [i for i in invoices if not i.get("excluded")]
+    elif show_excluded and not show_normal:
+        invoices = [i for i in invoices if i.get("excluded")]
+    elif not show_normal and not show_excluded:
+        invoices = []
 
-# ─────────────────────────────────────────────────────────
-# 列表页（列表编辑一体化）
-# ─────────────────────────────────────────────────────────
-def page_list(cfg):
-    st.header("📋 发票列表")
-
-    db_path = str(get_db_path(cfg))
-    invs_all = load_invoices(cfg, {"only_included": False})
-    if not invs_all:
-        st.info("暂无发票记录，请先扫描发票")
-        return
-
-    invs_ok = [i for i in invs_all if not i.get("excluded")]
-    invs_ex = [i for i in invs_all if i.get("excluded")]
-    total_amount = sum(i.get("amount_with_tax", 0) for i in invs_all)
-    reimbursable_amount = sum(i.get("amount_with_tax", 0) for i in invs_ok)
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("总发票数", f"{len(invs_all)} 张")
-    c2.metric("可报销", f"{len(invs_ok)} 张")
-    c3.metric("已排除", f"{len(invs_ex)} 张")
-    c4.metric("可报销金额", f"¥{reimbursable_amount:,.2f}",
-              delta=f"总金额 ¥{total_amount:,.2f}")
-
-    st.markdown("---")
-    c1, c2 = st.columns([2, 1])
-    with c1:
-        search = st.text_input("搜索销售方 / 购买方 / 发票号码 / 项目名称",
-                               placeholder="输入关键词...", key="list_search")
-    with c2:
-        filt = st.multiselect("状态筛选", ["✅ 正常", "❌ 排除"],
-                              default=["✅ 正常"], key="list_filt")
-
-    # 构建展示数据
-    data = []
-    id_to_inv = {}
-    for i in invs_all:
-        inv_id = i.get("id")
-        id_to_inv[inv_id] = i
-        data.append({
-            "ID": inv_id,
-            "开票日期": i.get("invoice_date", ""),
-            "发票号码": i.get("invoice_number", ""),
-            "项目名称": i.get("commodity_name", ""),
-            "规格型号": i.get("specification_model", ""),
-            "销售方": i.get("seller_name", ""),
-            "购买方": i.get("buyer_name", ""),
-            "价税合计": i.get("amount_with_tax", 0),
-            "税额": i.get("tax_amount", 0),
-            "归属项目": i.get("belong_project", ""),
-            "归属人": i.get("belong_person", ""),
-            "备注": i.get("remark", ""),
-            "状态": "❌ 排除" if i.get("excluded") else "✅ 正常",
-        })
-
-    df = pd.DataFrame(data)
-
-    # 过滤
-    fd = df.copy()
-    if "✅ 正常" not in filt and "❌ 排除" not in filt:
-        fd = fd.iloc[:0]
-    elif len(filt) == 1:
-        fd = fd[fd["状态"] == filt[0]]
-    if search:
-        fd = fd[
-            fd["销售方"].str.contains(search, case=False, na=False) |
-            fd["购买方"].str.contains(search, case=False, na=False) |
-            fd["发票号码"].str.contains(search, case=False, na=False) |
-            fd["项目名称"].str.contains(search, case=False, na=False)
+    search_lower = search.strip().lower()
+    if search_lower:
+        invoices = [
+            i for i in invoices
+            if (search_lower in (i.get("seller_name") or "").lower()
+                or search_lower in (i.get("buyer_name") or "").lower()
+                or search_lower in (i.get("invoice_number") or "").lower()
+                or search_lower in (i.get("commodity_name") or "").lower())
         ]
 
-    # 表格 — 可点击选行
-    st.caption(f"共 {len(fd)} 张发票，点击行查看/编辑详情")
-    sel = st.dataframe(
-        fd.drop(columns=["ID"]),
-        selection_mode="single-row",
-        on_select="rerun",
-        use_container_width=True, hide_index=True,
-        column_config={
-            "价税合计": st.column_config.NumberColumn(format="¥%.2f"),
-            "税额": st.column_config.NumberColumn(format="¥%.2f"),
-        })
+    all_invs = get_all_invoices(db(cfg))
+    total = len(all_invs)
+    ok = sum(1 for i in all_invs if not i.get("excluded"))
+    excluded = total - ok
+    reimbursable = sum(i.get("amount_with_tax") or 0 for i in all_invs if not i.get("excluded"))
+    total_amount = sum(i.get("amount_with_tax") or 0 for i in all_invs)
 
-    # ── 获取选中行 ──────────────────────────────────────
-    selected_rows = []
-    if sel is not None:
-        if hasattr(sel, 'selection') and hasattr(sel.selection, 'rows'):
-            selected_rows = sel.selection.rows
-        elif isinstance(sel, dict):
-            selected_rows = sel.get("selection", {}).get("rows", [])
+    ctx = get_flash(request)
+    ctx.update({
+        "page": "list",
+        "invoices": invoices,
+        "search": search, "status_filter": status,
+        "stats": {
+            "total": total, "ok_count": ok, "excluded_count": excluded,
+            "reimbursable_amount": reimbursable, "total_amount": total_amount,
+        },
+    })
+    return templates.TemplateResponse(request, "list.html", ctx)
 
-    if not selected_rows:
-        # ── 批量操作 ───────────────────────────────────────
-        with st.expander("🔧 批量操作"):
-            c1, c2 = st.columns(2)
-            with c1:
-                ids = st.multiselect("选择发票 ID",
-                    options=df["ID"].tolist(),
-                    format_func=lambda x: f"#{x}",
-                    key="batch_ids")
-            cc1, cc2 = st.columns(2)
-            with cc1:
-                if st.button("🚫 标记为排除", use_container_width=True) and ids:
-                    from invoice_clipper.database import update_invoice_status
-                    for i in ids:
-                        update_invoice_status(db_path, int(i), excluded=True)
-                    st.success(f"已排除 {len(ids)} 张发票")
-                    st.rerun()
-            with cc2:
-                if st.button("✅ 恢复为正常", use_container_width=True) and ids:
-                    from invoice_clipper.database import update_invoice_status
-                    for i in ids:
-                        update_invoice_status(db_path, int(i), excluded=False)
-                    st.success(f"已恢复 {len(ids)} 张发票")
-                    st.rerun()
-        return
 
-    # ── 详情编辑（一体化面板）────────────────────────────
-    row_idx = selected_rows[0]
-    selected_id = fd.iloc[row_idx]["ID"]
-    inv = id_to_inv.get(selected_id)
+@app.post("/list/batch-toggle")
+def batch_toggle(request: Request, ids: list[int] = Form(...), action: str = Form(...)):
+    cfg = request.app.state.config
+    excluded = action == "exclude"
+    for inv_id in ids:
+        update_invoice_status(db(cfg), inv_id, excluded=excluded)
+    label = "已排除" if excluded else "已恢复"
+    return flash_redirect("/list", f"批量操作完成: {len(ids)} 张发票{label}")
+
+
+@app.get("/list/{inv_id}")
+def get_edit(request: Request, inv_id: int):
+    cfg = request.app.state.config
+    inv = get_invoice_by_id(db(cfg), inv_id)
     if not inv:
-        return
+        raise HTTPException(404, "发票不存在")
+    attachments = get_attachments(db(cfg), inv_id)
+    ctx = get_flash(request)
+    ctx.update({
+        "page": "list",
+        "invoice": dict(inv),
+        "attachments": attachments,
+        "raw_json": json.dumps(dict(inv), ensure_ascii=False, indent=2, default=str),
+    })
+    return templates.TemplateResponse(request, "edit.html", ctx)
 
-    st.markdown("---")
-    st.subheader(f"📄 编辑发票 #{selected_id}")
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        inv_num = st.text_input("发票号码", value=inv.get("invoice_number", ""), key="ed_inv_num")
-        inv_code = st.text_input("发票代码", value=inv.get("invoice_code", ""), key="ed_inv_code")
-        inv_date = st.text_input("开票日期", value=inv.get("invoice_date", ""), key="ed_inv_date")
-        commodity = st.text_input("项目名称", value=inv.get("commodity_name", ""), key="ed_commodity")
-        spec = st.text_input("规格型号", value=inv.get("specification_model", ""), key="ed_spec")
-        category = st.text_input("分类", value=inv.get("category", ""), key="ed_category")
-    with col2:
-        buyer_name = st.text_input("购买方名称", value=inv.get("buyer_name", ""), key="ed_buyer")
-        buyer_tax = st.text_input("购买方税号", value=inv.get("buyer_tax_num", ""), key="ed_buyer_tax")
-        seller_name = st.text_input("销售方名称", value=inv.get("seller_name", ""), key="ed_seller")
-        seller_tax = st.text_input("销售方税号", value=inv.get("seller_tax_num", ""), key="ed_seller_tax")
-    with col3:
-        amount = st.number_input("价税合计", value=float(inv.get("amount_with_tax", 0)), format="%.2f", key="ed_amount")
-        tax = st.number_input("税额", value=float(inv.get("tax_amount", 0)), format="%.2f", key="ed_tax")
-        tax_rate = st.number_input("税率 (小数)", value=float(inv.get("tax_rate") or 0), format="%.4f", key="ed_tax_rate")
-        belong_project = st.text_input("归属项目", value=inv.get("belong_project", ""), key="ed_project")
-        belong_person = st.text_input("归属人", value=inv.get("belong_person", ""), key="ed_person")
-        remark = st.text_input("备注", value=inv.get("remark", ""), key="ed_remark")
+@app.post("/list/{inv_id}")
+async def post_edit(request: Request, inv_id: int):
+    cfg = request.app.state.config
+    form = await request.form()
+    updates = {}
+    for field in INVOICE_FIELDS:
+        if field in form:
+            val = form[field]
+            if field in ("amount_with_tax", "tax_amount", "tax_rate"):
+                try:
+                    updates[field] = float(val)
+                except (ValueError, TypeError):
+                    updates[field] = 0.0
+            else:
+                updates[field] = str(val)
+    update_invoice(db(cfg), inv_id, updates)
+    return flash_redirect(f"/list/{inv_id}", "保存成功")
 
-    # 按钮栏
-    bc1, bc2, bc3, bc4 = st.columns([1, 1, 1, 2])
-    with bc1:
-        if st.button("💾 保存修改", use_container_width=True):
-            from invoice_clipper.database import update_invoice
-            updates = {
-                "invoice_number": inv_num,
-                "invoice_code": inv_code,
-                "invoice_date": inv_date,
-                "commodity_name": commodity,
-                "specification_model": spec,
-                "buyer_name": buyer_name,
-                "buyer_tax_num": buyer_tax,
-                "seller_name": seller_name,
-                "seller_tax_num": seller_tax,
-                "amount_with_tax": amount,
-                "tax_amount": tax,
-                "tax_rate": tax_rate,
-                "category": category,
-                "belong_project": belong_project,
-                "belong_person": belong_person,
-                "remark": remark,
-            }
-            update_invoice(db_path, int(selected_id), updates)
-            st.success("修改已保存")
-            st.rerun()
-    with bc2:
-        if inv.get("excluded"):
-            if st.button("✅ 恢复报销", use_container_width=True):
-                from invoice_clipper.database import update_invoice_status
-                update_invoice_status(db_path, int(selected_id), excluded=False)
-                st.success(f"发票 #{selected_id} 已恢复")
-                st.rerun()
-        else:
-            if st.button("🚫 排除报销", use_container_width=True):
-                from invoice_clipper.database import update_invoice_status
-                update_invoice_status(db_path, int(selected_id), excluded=True)
-                st.success(f"发票 #{selected_id} 已排除")
-                st.rerun()
-    with bc3:
-        if st.button("🗑️ 删除发票", use_container_width=True, type="secondary"):
-            st.session_state[f"confirm_delete_{selected_id}"] = True
 
-    # 删除确认
-    if st.session_state.get(f"confirm_delete_{selected_id}"):
-        st.warning("删除后不可恢复，同时会删除该发票的所有附件。确认删除？")
-        cc1, cc2 = st.columns(2)
-        with cc1:
-            if st.button("✅ 确认删除", use_container_width=True):
-                import shutil
-                from invoice_clipper.database import delete_invoice, get_attachments
-                # 删除附件文件
-                for att in get_attachments(db_path, int(selected_id)):
-                    p = Path(att["stored_path"])
-                    if p.exists():
-                        p.unlink()
-                # 删除入库文件
-                stored = inv.get("stored_path", "")
-                if stored and Path(stored).exists():
-                    Path(stored).unlink()
-                # 清理空目录
-                att_dir = Path(inv.get("stored_path", "")).parent if stored else None
-                delete_invoice(db_path, int(selected_id))
-                if att_dir and att_dir.exists() and not any(att_dir.iterdir()):
-                    shutil.rmtree(att_dir, ignore_errors=True)
-                st.session_state.pop(f"confirm_delete_{selected_id}", None)
-                st.success(f"发票 #{selected_id} 已删除")
-                st.rerun()
-        with cc2:
-            if st.button("❌ 取消", use_container_width=True):
-                st.session_state.pop(f"confirm_delete_{selected_id}", None)
-                st.rerun()
+@app.post("/list/{inv_id}/toggle")
+def toggle_status(request: Request, inv_id: int):
+    cfg = request.app.state.config
+    inv = get_invoice_by_id(db(cfg), inv_id)
+    if not inv:
+        raise HTTPException(404)
+    new_status = not inv.get("excluded")
+    update_invoice_status(db(cfg), inv_id, excluded=new_status)
+    label = "已排除" if new_status else "已恢复"
+    return flash_redirect(f"/list/{inv_id}", f"发票 #{inv_id} {label}")
 
-    # ── 附件管理 ──────────────────────────────────────────
-    st.markdown("---")
-    st.subheader("📎 附件管理")
 
-    from invoice_clipper.database import get_attachments, insert_attachment, delete_attachment
-    from invoice_clipper.file_utils import build_attachment_path, next_attachment_seq
+@app.post("/list/{inv_id}/delete")
+def delete_invoice_route(request: Request, inv_id: int):
+    cfg = request.app.state.config
+    inv = get_invoice_by_id(db(cfg), inv_id)
+    if not inv:
+        raise HTTPException(404)
 
-    attachments = get_attachments(db_path, int(selected_id))
+    for att in get_attachments(db(cfg), inv_id):
+        p = Path(att["stored_path"])
+        if p.exists():
+            p.unlink()
+
+    stored = inv.get("stored_path")
+    if stored:
+        p = Path(stored)
+        if p.exists():
+            p.unlink()
+        parent = p.parent
+        try:
+            if parent.exists() and not any(parent.iterdir()):
+                parent.rmdir()
+        except OSError:
+            pass
+
+    delete_invoice(db(cfg), inv_id)
+    return flash_redirect("/list", f"发票 #{inv_id} 已删除")
+
+
+@app.post("/list/{inv_id}/attachments")
+async def upload_attachments(request: Request, inv_id: int,
+                              files: list[UploadFile] = File(...),
+                              file_type: str = Form("other")):
+    cfg = request.app.state.config
+    inv = get_invoice_by_id(db(cfg), inv_id)
+    if not inv:
+        raise HTTPException(404)
+
     inv_stored = inv.get("stored_path", "")
-
-    # 展示已有附件
-    if attachments:
-        cols = st.columns(min(len(attachments), 4))
-        for idx, att in enumerate(attachments):
-            att_path = Path(att["stored_path"])
-            with cols[idx % 4]:
-                suffix = att_path.suffix.lower()
-                if suffix in (".png", ".jpg", ".jpeg", ".bmp", ".webp"):
-                    try:
-                        st.image(str(att_path), caption=att["original_name"], use_container_width=True)
-                    except Exception:
-                        st.write(f"📄 {att['original_name']}")
-                elif suffix == ".pdf":
-                    st.write(f"📕 {att['original_name']}")
-                else:
-                    st.write(f"📄 {att['original_name']}")
-
-                type_label = {"payment": "付款记录", "receipt": "收据", "other": "其他"}.get(att.get("file_type", "other"), "其他")
-                st.caption(f"{type_label} | {att.get('file_size', 0) // 1024}KB")
-
-                if st.button(f"🗑️ 删除", key=f"del_att_{att['id']}"):
-                    if att_path.exists():
-                        att_path.unlink()
-                    delete_attachment(db_path, att["id"])
-                    st.success("附件已删除")
-                    st.rerun()
-    else:
-        st.caption("暂无附件")
-
-    # 上传新附件
     if not inv_stored:
-        st.warning("发票尚未归档，无法上传附件")
-    else:
-        st.markdown("**📤 上传附件**")
-        up_counter = st.session_state.get(f"att_upcnt_{selected_id}", 0)
-        upload_col1, upload_col2 = st.columns([3, 1])
-        with upload_col1:
-            uploaded = st.file_uploader(
-                "选择文件（图片/PDF）",
-                type=["png", "jpg", "jpeg", "bmp", "pdf", "webp"],
-                accept_multiple_files=True,
-                key=f"att_upload_{selected_id}_v{up_counter}",
-                label_visibility="collapsed")
-        with upload_col2:
-            file_type = st.selectbox("文件类型", ["payment", "receipt", "other"],
-                                     format_func=lambda x: {"payment": "付款记录", "receipt": "收据", "other": "其他"}.get(x, x),
-                                     key=f"att_type_{selected_id}",
-                                     label_visibility="collapsed")
+        return flash_redirect(f"/list/{inv_id}",
+                              "发票未归档，无法上传附件", "warning")
 
-        if uploaded:
-            seq = next_attachment_seq(inv_stored)
-            for uf in uploaded:
-                ext = Path(uf.name).suffix.lower() or ".bin"
-                dest = build_attachment_path(inv_stored, seq, ext)
-                with open(dest, "wb") as fp:
-                    fp.write(uf.getvalue())
+    seq = next_attachment_seq(inv_stored)
+    count = 0
+    for uf in files:
+        content = await uf.read()
+        if not content:
+            continue
+        ext = Path(uf.filename).suffix.lower() if uf.filename else ".bin"
+        dest = build_attachment_path(inv_stored, seq, ext)
+        with open(dest, "wb") as fp:
+            fp.write(content)
+        insert_attachment(db(cfg), {
+            "invoice_id": inv_id,
+            "filename": dest.name,
+            "original_name": uf.filename or dest.name,
+            "file_type": file_type,
+            "stored_path": str(dest),
+            "file_size": len(content),
+            "created_at": datetime.now().isoformat(),
+        })
+        seq += 1
+        count += 1
 
-                insert_attachment(db_path, {
-                    "invoice_id": int(selected_id),
-                    "filename": dest.name,
-                    "original_name": uf.name,
-                    "file_type": file_type,
-                    "stored_path": str(dest),
-                    "file_size": len(uf.getvalue()),
-                    "created_at": datetime.now().isoformat(),
-                })
-                seq += 1
-            st.session_state[f"att_upcnt_{selected_id}"] = up_counter + 1
-            st.success(f"已上传 {len(uploaded)} 个附件")
-            st.rerun()
+    return flash_redirect(f"/list/{inv_id}", f"上传 {count} 个附件")
 
-    # 原始数据
-    with st.expander("📦 原始数据（JSON）"):
-        st.json(inv)
 
-# ─────────────────────────────────────────────────────────
-# 查询页
-# ─────────────────────────────────────────────────────────
-def page_query(cfg):
-    st.header("🔍 查询筛选")
-    c1, c2 = st.columns(2)
-    with c1:
-        d1 = st.date_input("开始日期", value=None, key="q_date_from")
-    with c2:
-        d2 = st.date_input("结束日期", value=None, key="q_date_to")
-    c1, c2 = st.columns(2)
-    with c1:
-        seller = st.text_input("销售方名称", placeholder="输入销售方关键词...", key="q_seller")
-    with c2:
-        buyer = st.text_input("购买方名称", placeholder="输入购买方关键词...", key="q_buyer")
-    c1, c2 = st.columns(2)
-    with c1:
-        project = st.text_input("归属项目", placeholder="精确匹配", key="q_project")
-    with c2:
-        person = st.text_input("归属人", placeholder="精确匹配", key="q_person")
-    only = st.checkbox("只显示可报销发票", value=True, key="qry_only")
+@app.post("/list/{inv_id}/attachments/{att_id}/delete")
+def delete_attachment_route(request: Request, inv_id: int, att_id: int):
+    cfg = request.app.state.config
+    atts = get_attachments(db(cfg), inv_id)
+    target = next((a for a in atts if a["id"] == att_id), None)
+    if target:
+        p = Path(target["stored_path"])
+        if p.exists():
+            p.unlink()
+        delete_attachment(db(cfg), att_id)
+    return flash_redirect(f"/list/{inv_id}", "附件已删除")
 
-    if st.button("🔍 查询", type="primary", use_container_width=True):
-        filters = {
-            "date_from": d1.strftime("%Y-%m-%d") if d1 else None,
-            "date_to": d2.strftime("%Y-%m-%d") if d2 else None,
-            "seller": seller if seller else None,
-            "buyer": buyer if buyer else None,
-            "project": project if project else None,
-            "person": person if person else None,
-            "only_included": only,
-        }
-        invs = load_invoices(cfg, filters)
-        if not invs:
-            st.warning("没有找到符合条件的发票")
-            return
 
-        data = [{
-            "ID": i.get("id"),
-            "开票日期": i.get("invoice_date", ""),
-            "发票号码": i.get("invoice_number", ""),
-            "项目名称": i.get("commodity_name", ""),
-            "规格型号": i.get("specification_model", ""),
-            "销售方": i.get("seller_name", ""),
-            "购买方": i.get("buyer_name", ""),
-            "价税合计": i.get("amount_with_tax", 0),
-            "归属项目": i.get("belong_project", ""),
-            "归属人": i.get("belong_person", ""),
-            "状态": "❌ 排除" if i.get("excluded") else "✅ 正常",
-        } for i in invs]
-        df = pd.DataFrame(data)
-        total = df[df['状态'] == '✅ 正常']['价税合计'].sum()
-        st.success(f"找到 {len(df)} 张发票，可报销合计 ¥{total:,.2f}")
-        st.dataframe(df.drop(columns=["ID"]),
-            use_container_width=True, hide_index=True,
-            column_config={"价税合计": st.column_config.NumberColumn(format="¥%.2f")})
+@app.get("/query")
+def get_query(request: Request):
+    cfg = request.app.state.config
+    filters = build_filters(request)
+    if request.query_params.get("only_included"):
+        filters["only_included"] = True
 
-# ─────────────────────────────────────────────────────────
-# 导出页
-# ─────────────────────────────────────────────────────────
-def page_export(cfg):
-    st.header("📥 导出报销")
-    st.markdown("选择筛选条件，一键导出 Excel 明细表和 PDF 报销包。")
-    st.subheader("筛选条件")
-    c1, c2 = st.columns(2)
-    with c1:
-        d1 = st.date_input("开始日期", value=None, key="efrom")
-    with c2:
-        d2 = st.date_input("结束日期", value=None, key="eto")
-    c1, c2 = st.columns(2)
-    with c1:
-        seller = st.text_input("销售方名称", placeholder="可选", key="eseller")
-    with c2:
-        buyer = st.text_input("购买方名称", placeholder="可选", key="ebuyer")
-    c1, c2 = st.columns(2)
-    with c1:
-        project = st.text_input("归属项目", placeholder="可选", key="eproject")
-    with c2:
-        person = st.text_input("归属人", placeholder="可选", key="eperson")
-    fmt = st.radio("导出格式", ["Excel + PDF", "仅 Excel", "仅 PDF"], horizontal=True)
+    results = None
+    total_amount = 0.0
+    if filters:
+        results = query_invoices(db(cfg), filters)
+        total_amount = sum(r.get("amount_with_tax") or 0 for r in results)
 
-    st.markdown("---")
-    st.subheader("预览")
-    filters = {
-        "date_from": d1.strftime("%Y-%m-%d") if d1 else None,
-        "date_to": d2.strftime("%Y-%m-%d") if d2 else None,
-        "seller": seller if seller else None,
-        "buyer": buyer if buyer else None,
-        "project": project if project else None,
-        "person": person if person else None,
-        "only_included": True,
-    }
-    invs = load_invoices(cfg, filters)
-    if not invs:
-        st.warning("没有符合条件的发票")
-        return
-    total = sum(i.get("amount_with_tax", 0) for i in invs)
-    st.info(f"将导出 {len(invs)} 张发票，可报销合计 ¥{total:,.2f}")
+    ctx = get_flash(request)
+    ctx.update({
+        "page": "query",
+        "results": results,
+        "total_amount": total_amount,
+        "filters": {
+            "date_from": request.query_params.get("date_from", ""),
+            "date_to": request.query_params.get("date_to", ""),
+            "seller": request.query_params.get("seller", ""),
+            "buyer": request.query_params.get("buyer", ""),
+            "project": request.query_params.get("project", ""),
+            "person": request.query_params.get("person", ""),
+            "only_included": request.query_params.get("only_included", ""),
+        },
+    })
+    return templates.TemplateResponse(request, "query.html", ctx)
 
-    if st.button("📥 开始导出", type="primary", use_container_width=True):
-        from invoice_clipper.exporter import export_excel, export_merged_pdf, build_export_label
-        edir = Path.home() / "Documents" / "发票夹子" / "exports"
-        edir.mkdir(parents=True, exist_ok=True)
-        label = build_export_label(filters)
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        results = []
-        if fmt in ["Excel + PDF", "仅 Excel"]:
-            xlpath = edir / f"报销明细_{label}_{ts}.xlsx"
-            export_excel(invs, xlpath)
-            results.append(("Excel 明细表", xlpath))
-        if fmt in ["Excel + PDF", "仅 PDF"]:
-            pdfpath = edir / f"报销发票_{label}_{ts}.pdf"
-            r = export_merged_pdf(invs, pdfpath)
-            if r:
-                results.append(("PDF 报销包", pdfpath))
-        st.success("导出完成！")
-        for name, path in results:
-            with open(path, "rb") as f:
-                st.download_button(
-                    label=f"下载 {name}", data=f.read(),
-                    file_name=path.name, mime="application/octet-stream",
-                    use_container_width=True)
 
-# ─────────────────────────────────────────────────────────
-# 主函数
-# ─────────────────────────────────────────────────────────
-def main():
-    cfg = load_config()
-    page = sidebar_nav()
-    if page == "📤 扫描发票":
-        page_scan(cfg)
-    elif page == "📋 发票列表":
-        page_list(cfg)
-    elif page == "🔍 查询筛选":
-        page_query(cfg)
-    elif page == "📥 导出报销":
-        page_export(cfg)
+@app.get("/export")
+def get_export(request: Request):
+    ctx = get_flash(request)
+    ctx.update({
+        "page": "export",
+        "filters": {"date_from": "", "date_to": "", "seller": "", "buyer": "",
+                     "project": "", "person": "", "format": "both"},
+        "download_links": None, "invoice_count": None, "total_amount": 0.0,
+    })
+    return templates.TemplateResponse(request, "export.html", ctx)
+
+
+@app.post("/export")
+async def post_export(request: Request):
+    cfg = request.app.state.config
+    form = await request.form()
+
+    filters = {}
+    for key in ("date_from", "date_to", "seller", "buyer", "project", "person"):
+        val = form.get(key, "").strip()
+        if val:
+            filters[key] = val
+    filters["only_included"] = True
+
+    fmt = form.get("format", "both")
+    invoices = query_invoices(db(cfg), filters) if filters else []
+    total_amount = sum(i.get("amount_with_tax") or 0 for i in invoices)
+
+    export_dir = Path.home() / "Documents" / "发票夹子" / "exports"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    label = build_export_label(filters) if filters else "全部"
+    download_links = []
+
+    try:
+        if fmt in ("excel", "both"):
+            excel_path = export_dir / f"报销明细_{label}.xlsx"
+            export_excel(invoices, str(excel_path))
+            download_links.append({"label": "下载 Excel", "filename": excel_path.name})
+
+        if fmt in ("pdf", "both"):
+            pdf_path = export_dir / f"报销发票_{label}.pdf"
+            result = export_merged_pdf(invoices, str(pdf_path))
+            if result:
+                download_links.append({"label": "下载合并 PDF", "filename": pdf_path.name})
+    except Exception as e:
+        return flash_redirect("/export", f"导出失败: {e}", "error")
+
+    ctx = get_flash(request)
+    ctx.update({
+        "page": "export",
+        "filters": {**filters, "format": fmt},
+        "download_links": download_links,
+        "invoice_count": len(invoices),
+        "total_amount": total_amount,
+    })
+    return templates.TemplateResponse(request, "export.html", ctx)
+
+
+@app.get("/export/download/{filename}")
+def download_export(filename: str):
+    export_dir = Path.home() / "Documents" / "发票夹子" / "exports"
+    filepath = export_dir / filename
+    if not filepath.resolve().is_relative_to(export_dir.resolve()):
+        raise HTTPException(404)
+    if not re.match(r'^报销(明细|发票)_.+\.(xlsx|pdf)$', filename):
+        raise HTTPException(404)
+    if not filepath.exists():
+        raise HTTPException(404)
+    return FileResponse(filepath, filename=filename)
+
 
 if __name__ == "__main__":
-    main()
+    import uvicorn
+    uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=True)

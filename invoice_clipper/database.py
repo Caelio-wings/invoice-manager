@@ -226,11 +226,6 @@ def get_distinct_persons(db_path: str) -> List[str]:
     return [r[0] for r in rows if r[0]]
 
 
-def exclude_invoice(db_path: str, invoice_id: int, excluded: bool = True):
-    """标记发票为排除/恢复（别名，兼容旧调用）"""
-    update_invoice_status(db_path, invoice_id, excluded)
-
-
 # ── 附件相关 ─────────────────────────────────────────────
 
 def get_attachments(db_path: str, invoice_id: int) -> List[dict]:

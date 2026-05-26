@@ -6,14 +6,13 @@
 import base64
 import json
 import logging
-import re
 from pathlib import Path
 from typing import Optional, Dict, Any
 
 import httpx
-import fitz
 
 from .base import BaseEngine, EngineResult
+from ._utils import pdf_to_image, normalize_date, parse_number, infer_category, calculate_confidence
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +77,7 @@ class LLMVisionEngine(BaseEngine):
         try:
             # 准备图片 Base64
             if suffix == ".pdf":
-                img_bytes = self._pdf_to_image(file_path)
+                img_bytes = pdf_to_image(file_path)
                 mime_type = "image/png"
             elif suffix in (".png", ".jpg", ".jpeg", ".bmp", ".webp"):
                 img_bytes = Path(file_path).read_bytes()
@@ -129,7 +128,7 @@ class LLMVisionEngine(BaseEngine):
             data = self._post_process(data)
 
             # 计算置信度
-            confidence = self._calculate_confidence(data)
+            confidence = calculate_confidence(data)
 
             return EngineResult(
                 data=data,
@@ -199,19 +198,6 @@ class LLMVisionEngine(BaseEngine):
             logger.error(f"LLM API 调用异常: {e}")
             return None
 
-    def _pdf_to_image(self, pdf_path: str, dpi: int = 200) -> Optional[bytes]:
-        """将 PDF 第一页转为 PNG 图片"""
-        try:
-            doc = fitz.open(pdf_path)
-            page = doc[0]
-            pix = page.get_pixmap(dpi=dpi)
-            img_bytes = pix.tobytes("png")
-            doc.close()
-            return img_bytes
-        except Exception as e:
-            logger.error(f"PDF 转图片失败: {e}")
-            return None
-
     def _parse_json(self, text: str) -> Optional[Dict[str, Any]]:
         """从 LLM 响应中解析 JSON"""
         if not text:
@@ -262,107 +248,17 @@ class LLMVisionEngine(BaseEngine):
 
         # 日期标准化
         date_str = data.get("invoice_date", "")
-        processed["invoice_date"] = self._normalize_date(str(date_str))
+        processed["invoice_date"] = normalize_date(str(date_str))
 
         # 金额字段
         for f in ["tax_rate", "tax_amount", "amount_with_tax"]:
-            processed[f] = self._parse_number(data.get(f))
+            processed[f] = parse_number(data.get(f))
 
         # 如果没有分类，尝试推断
         if not processed.get("category"):
-            processed["category"] = self._infer_category(data)
+            seller = data.get("seller_name", "")
+            commodity = data.get("commodity_name", "")
+            processed["category"] = infer_category(f"{seller} {commodity}")
 
         return processed
 
-    def _normalize_date(self, date_str: str) -> str:
-        """标准化日期格式为 YYYY-MM-DD"""
-        if not date_str:
-            return ""
-
-        # 处理 "2023-01-01" 格式
-        m = re.search(r"(\d{4})-(\d{1,2})-(\d{1,2})", date_str)
-        if m:
-            return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
-
-        # 处理 "2023年01月01日" 格式
-        m = re.search(r"(\d{4})年(\d{1,2})月(\d{1,2})日", date_str)
-        if m:
-            return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
-
-        # 处理 "2023/01/01" 格式
-        m = re.search(r"(\d{4})/(\d{1,2})/(\d{1,2})", date_str)
-        if m:
-            return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
-
-        return date_str
-
-    def _parse_number(self, val) -> Optional[float]:
-        """解析数字，处理字符串和千分位"""
-        if val is None:
-            return None
-        if isinstance(val, (int, float)):
-            return float(val)
-        if isinstance(val, str):
-            # 移除千分位逗号、百分号、货币符号
-            cleaned = re.sub(r"[¥￥$,%]", "", val.strip())
-            try:
-                num = float(cleaned)
-                # 如果原值包含 %，且大于1，可能是百分比值（如 6%），转换为小数
-                if "%" in val and num > 1:
-                    num = num / 100
-                return num
-            except ValueError:
-                return None
-        return None
-
-    def _infer_category(self, data: Dict[str, Any]) -> str:
-        """根据销售方名称等推断分类"""
-        seller = data.get("seller_name", "").lower()
-        commodity = data.get("commodity_name", "").lower()
-
-        text = f"{seller} {commodity}"
-
-        if any(k in text for k in ["餐饮", "餐厅", "饭店", "食堂"]):
-            return "餐饮"
-        elif any(k in text for k in ["交通", "运输", "通行", "机票", "火车", "滴滴"]):
-            return "交通"
-        elif any(k in text for k in ["住宿", "酒店", "宾馆", "旅馆"]):
-            return "住宿"
-        elif any(k in text for k in ["办公", "文具", "打印", "复印", "耗材"]):
-            return "办公"
-        elif any(k in text for k in ["服务", "咨询", "代理", "顾问", "设计"]):
-            return "服务"
-        elif any(k in text for k in ["通讯", "通信", "电话", "宽带"]):
-            return "通讯"
-        else:
-            return "其他"
-
-    def _calculate_confidence(self, fields: Dict[str, Any]) -> float:
-        """
-        计算置信度，基于关键字段是否齐全
-        """
-        def _has_value(val) -> bool:
-            """检查字段是否有有效值（排除 None、空字符串）"""
-            if val is None:
-                return False
-            if isinstance(val, str) and not val.strip():
-                return False
-            return True
-
-        required = ["invoice_number", "amount_with_tax", "invoice_date", "seller_name"]
-        present = sum(1 for f in required if _has_value(fields.get(f)))
-
-        base = present / len(required)
-
-        # 额外加分
-        bonus = 0
-        if _has_value(fields.get("buyer_tax_num")):
-            bonus += 0.05
-        if _has_value(fields.get("seller_tax_num")):
-            bonus += 0.05
-        if _has_value(fields.get("commodity_name")):
-            bonus += 0.05
-        if fields.get("tax_rate") is not None:
-            bonus += 0.05
-
-        return min(1.0, base + bonus)
