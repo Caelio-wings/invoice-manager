@@ -64,12 +64,6 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build]
-# 强制包含包内非 Python 资源文件（不受 VCS 状态影响）
-include = [
-    "invoice_clipper/templates/*.html",
-    "invoice_clipper/static/*.css",
-    "invoice_clipper/config.example.yaml",
-]
 # 排除根级遗留文件（/ 前缀锚定到项目根目录）
 exclude = [
     "/run.py",
