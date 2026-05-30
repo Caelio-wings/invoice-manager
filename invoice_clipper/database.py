@@ -1,277 +1,175 @@
 """
-发票数据库模块 - SQLite 存储（重构版 v2.0）
-移除风控、验真相关字段，新增归属、税号、备注等字段
+发票数据库模块 — 调度层
+
+通过全局 _backend 实例将操作委托给实际的后端实现（SQLite / PostgreSQL）。
+对外函数签名与 v2.0 保持兼容。
 """
-import sqlite3
-import json
 import logging
 from pathlib import Path
-from datetime import datetime
 from typing import Optional, List, Dict
+
+from .db_backends import SQLiteBackend, PostgreSQLBackend, DatabaseBackend
 
 logger = logging.getLogger(__name__)
 
+# ── 全局后端 ──────────────────────────────────────
 
-def get_conn(db_path: str) -> sqlite3.Connection:
-    """获取数据库连接，设置 row_factory"""
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    return conn
+_backend: Optional[DatabaseBackend] = None
 
 
-def init_db(db_path: str):
-    """初始化数据库表（新版结构）"""
-    with get_conn(db_path) as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS invoices (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                invoice_number TEXT,
-                invoice_code TEXT,
-                invoice_date TEXT,
-                commodity_name TEXT,
-                specification_model TEXT,
-                buyer_name TEXT,
-                buyer_tax_num TEXT,
-                seller_name TEXT,
-                seller_tax_num TEXT,
-                tax_rate REAL,
-                tax_amount REAL,
-                amount_with_tax REAL,
-                category TEXT,
-                belong_project TEXT,
-                belong_person TEXT,
-                remark TEXT,
-                source TEXT,
-                original_filename TEXT,
-                stored_path TEXT,
-                excluded INTEGER DEFAULT 0,
-                created_at TEXT,
-                raw_text TEXT,
-                raw_json TEXT
-            )
-        """)
-        # 创建常用索引
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_invoice_number ON invoices(invoice_number)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_invoice_date ON invoices(invoice_date)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_seller_name ON invoices(seller_name)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_buyer_name ON invoices(buyer_name)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_belong_project ON invoices(belong_project)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_belong_person ON invoices(belong_person)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_excluded ON invoices(excluded)")
-
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS attachments (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                invoice_id INTEGER NOT NULL,
-                filename TEXT,
-                original_name TEXT,
-                file_type TEXT DEFAULT 'other',
-                stored_path TEXT,
-                file_size INTEGER DEFAULT 0,
-                created_at TEXT,
-                FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE CASCADE
-            )
-        """)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_att_invoice_id ON attachments(invoice_id)")
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.commit()
-    logger.info(f"数据库初始化完成: {db_path}")
-
-
-def insert_invoice(db_path: str, data: dict) -> int:
-    """插入发票记录，返回自增ID"""
-    cols = [
-        "invoice_number", "invoice_code", "invoice_date",
-        "commodity_name", "specification_model",
-        "buyer_name", "buyer_tax_num",
-        "seller_name", "seller_tax_num",
-        "tax_rate", "tax_amount", "amount_with_tax",
-        "category",
-        "belong_project", "belong_person", "remark",
-        "source", "original_filename", "stored_path",
-        "created_at", "raw_text", "raw_json"
-    ]
-    placeholders = ",".join(":" + c for c in cols)
-    with get_conn(db_path) as conn:
-        cur = conn.execute(
-            f"INSERT INTO invoices ({','.join(cols)}) VALUES ({placeholders})",
-            {k: v for k, v in data.items() if k in cols}
+def get_backend() -> DatabaseBackend:
+    """获取当前全局后端实例"""
+    global _backend
+    if _backend is None:
+        raise RuntimeError(
+            "数据库后端未初始化。请先调用 init_db(config) 或 set_backend(config)。"
         )
-        conn.commit()
-        return cur.lastrowid
+    return _backend
 
 
-def is_duplicate(db_path: str, invoice_number: str, amount_with_tax: float) -> bool:
-    """检查发票号+金额是否已存在（重复报销）"""
-    if not invoice_number:
-        return False
-    with get_conn(db_path) as conn:
-        row = conn.execute(
-            "SELECT id FROM invoices WHERE invoice_number=? AND amount_with_tax=?",
-            (invoice_number, amount_with_tax)
-        ).fetchone()
-    return row is not None
+def set_backend(config: dict) -> DatabaseBackend:
+    """根据配置创建并设置全局后端"""
+    global _backend
+    storage = config if isinstance(config, dict) and "db_type" in config else config.get("storage", config)
+    db_type = storage.get("db_type", "sqlite")
+    if db_type == "postgresql":
+        _backend = PostgreSQLBackend(config)
+        logger.info("数据库后端: PostgreSQL")
+    else:
+        _backend = SQLiteBackend(config)
+        logger.info("数据库后端: SQLite")
+    return _backend
 
 
-def exists_by_invoice_number(db_path: str, invoice_number: str) -> bool:
-    """检查发票号码是否已入库（防止同一发票多次识别）"""
-    if not invoice_number:
-        return False
-    with get_conn(db_path) as conn:
-        row = conn.execute(
-            "SELECT id FROM invoices WHERE invoice_number=? LIMIT 1",
-            (invoice_number,)
-        ).fetchone()
-    return row is not None
+# ── 初始化 ────────────────────────────────────────
 
 
-def query_invoices(db_path: str, filters: dict) -> List[dict]:
+def init_db(db_path_or_config):
     """
-    查询发票列表
-    filters 支持：
-        date_from, date_to: 开票日期范围 (invoice_date)
-        seller: 销售方名称模糊匹配 (seller_name)
-        buyer: 购买方名称模糊匹配 (buyer_name)
-        project: 归属项目精确匹配 (belong_project)
-        person: 归属人精确匹配 (belong_person)
-        exclude_ids: 排除的ID列表
-        only_included: 只返回未排除的发票（默认True）
+    初始化数据库。
+
+    Args:
+        db_path_or_config: 可以是 SQLite 路径字符串（向后兼容），
+                          也可以是配置字典（包含 storage.db_type 等字段）。
     """
-    sql = "SELECT * FROM invoices WHERE 1=1"
-    params = []
-
-    if filters.get("date_from"):
-        sql += " AND invoice_date >= ?"
-        params.append(filters["date_from"])
-    if filters.get("date_to"):
-        sql += " AND invoice_date <= ?"
-        params.append(filters["date_to"])
-    if filters.get("seller"):
-        sql += " AND seller_name LIKE ?"
-        params.append(f"%{filters['seller']}%")
-    if filters.get("buyer"):
-        sql += " AND buyer_name LIKE ?"
-        params.append(f"%{filters['buyer']}%")
-    if filters.get("project"):
-        sql += " AND belong_project = ?"
-        params.append(filters["project"])
-    if filters.get("person"):
-        sql += " AND belong_person = ?"
-        params.append(filters["person"])
-    if filters.get("only_included", True):
-        sql += " AND excluded = 0"
-    if filters.get("exclude_ids"):
-        placeholders = ",".join("?" * len(filters["exclude_ids"]))
-        sql += f" AND id NOT IN ({placeholders})"
-        params.extend(filters["exclude_ids"])
-
-    sql += " ORDER BY invoice_date ASC, id ASC"
-
-    with get_conn(db_path) as conn:
-        rows = conn.execute(sql, params).fetchall()
-    return [dict(r) for r in rows]
+    if isinstance(db_path_or_config, str):
+        # 向后兼容：传入的是 SQLite 路径
+        backend = SQLiteBackend({"storage": {"db_type": "sqlite", "db_path": db_path_or_config}})
+        global _backend
+        _backend = backend
+    else:
+        set_backend(db_path_or_config)
+    get_backend().init_db()
+    logger.info("数据库初始化完成")
 
 
-def update_invoice_status(db_path: str, inv_id: int, excluded: bool = True):
-    """标记发票为排除/恢复"""
-    with get_conn(db_path) as conn:
-        conn.execute(
-            "UPDATE invoices SET excluded=? WHERE id=?",
-            (1 if excluded else 0, inv_id)
-        )
-        conn.commit()
+def get_conn(db_path: str = None):
+    """
+    获取数据库连接（向后兼容）。
+    如果 _backend 已设置，直接返回其后端连接；
+    否则根据 db_path 创建临时 SQLiteBackend。
+    """
+    if _backend is not None:
+        return _backend.get_conn()
+    # 向后兼容：直接创建 SQLite 连接
+    backend = SQLiteBackend({"storage": {"db_path": db_path or ":memory:"}})
+    return backend.get_conn()
 
 
-def update_invoice(db_path: str, inv_id: int, updates: dict):
-    """更新发票任意字段"""
-    if not updates:
-        return
-    set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
-    values = list(updates.values()) + [inv_id]
-    sql = f"UPDATE invoices SET {set_clause} WHERE id = ?"
-    with get_conn(db_path) as conn:
-        conn.execute(sql, values)
-        conn.commit()
+# ── 发票 CRUD ─────────────────────────────────────
 
 
-def get_invoice_by_id(db_path: str, invoice_id: int) -> Optional[dict]:
-    """根据ID获取单张发票"""
-    with get_conn(db_path) as conn:
-        row = conn.execute("SELECT * FROM invoices WHERE id=?", (invoice_id,)).fetchone()
-    return dict(row) if row else None
+def insert_invoice(data: dict) -> int:
+    return get_backend().insert_invoice(data)
 
 
-def get_all_invoices(db_path: str) -> List[dict]:
-    """获取所有发票（按日期升序）"""
-    with get_conn(db_path) as conn:
-        rows = conn.execute("SELECT * FROM invoices ORDER BY invoice_date ASC").fetchall()
-    return [dict(r) for r in rows]
+def is_duplicate(invoice_number: str, amount_with_tax: float) -> bool:
+    return get_backend().is_duplicate(invoice_number, amount_with_tax)
 
 
-def get_distinct_projects(db_path: str) -> List[str]:
-    """获取所有不重复的归属项目（用于下拉筛选）"""
-    with get_conn(db_path) as conn:
-        rows = conn.execute(
-            "SELECT DISTINCT belong_project FROM invoices WHERE belong_project != '' ORDER BY belong_project"
-        ).fetchall()
-    return [r[0] for r in rows if r[0]]
+def exists_by_invoice_number(invoice_number: str) -> bool:
+    return get_backend().exists_by_invoice_number(invoice_number)
 
 
-def get_distinct_persons(db_path: str) -> List[str]:
-    """获取所有不重复的归属人（用于下拉筛选）"""
-    with get_conn(db_path) as conn:
-        rows = conn.execute(
-            "SELECT DISTINCT belong_person FROM invoices WHERE belong_person != '' ORDER BY belong_person"
-        ).fetchall()
-    return [r[0] for r in rows if r[0]]
+def query_invoices(filters: dict) -> List[dict]:
+    return get_backend().query_invoices(filters)
 
 
-# ── 附件相关 ─────────────────────────────────────────────
-
-def get_attachments(db_path: str, invoice_id: int) -> List[dict]:
-    """获取某张发票的所有附件"""
-    with get_conn(db_path) as conn:
-        rows = conn.execute(
-            "SELECT * FROM attachments WHERE invoice_id=? ORDER BY created_at ASC",
-            (invoice_id,)
-        ).fetchall()
-    return [dict(r) for r in rows]
+def update_invoice_status(inv_id: int, excluded: bool = True):
+    get_backend().update_invoice_status(inv_id, excluded)
 
 
-def insert_attachment(db_path: str, attachment: dict) -> int:
-    """插入附件记录，返回自增ID"""
-    cols = ["invoice_id", "filename", "original_name", "file_type",
-            "stored_path", "file_size", "created_at"]
-    placeholders = ",".join(":" + c for c in cols)
-    with get_conn(db_path) as conn:
-        cur = conn.execute(
-            f"INSERT INTO attachments ({','.join(cols)}) VALUES ({placeholders})",
-            {k: v for k, v in attachment.items() if k in cols}
-        )
-        conn.commit()
-        return cur.lastrowid
+def update_invoice(inv_id: int, updates: dict):
+    get_backend().update_invoice(inv_id, updates)
 
 
-def delete_attachment(db_path: str, attachment_id: int) -> bool:
-    """删除单条附件记录"""
-    with get_conn(db_path) as conn:
-        cur = conn.execute("DELETE FROM attachments WHERE id=?", (attachment_id,))
-        conn.commit()
-        return cur.rowcount > 0
+def get_invoice_by_id(invoice_id: int) -> Optional[dict]:
+    return get_backend().get_invoice_by_id(invoice_id)
 
 
-def delete_attachments_by_invoice(db_path: str, invoice_id: int) -> int:
-    """删除某发票的所有附件记录，返回删除数量"""
-    with get_conn(db_path) as conn:
-        cur = conn.execute("DELETE FROM attachments WHERE invoice_id=?", (invoice_id,))
-        conn.commit()
-        return cur.rowcount
+def get_all_invoices() -> List[dict]:
+    return get_backend().get_all_invoices()
 
 
-def delete_invoice(db_path: str, invoice_id: int) -> bool:
-    """删除发票及其附件记录"""
-    delete_attachments_by_invoice(db_path, invoice_id)
-    with get_conn(db_path) as conn:
-        cur = conn.execute("DELETE FROM invoices WHERE id=?", (invoice_id,))
-        conn.commit()
-        return cur.rowcount > 0
+def get_distinct_projects() -> List[str]:
+    return get_backend().get_distinct_projects()
+
+
+def get_distinct_persons() -> List[str]:
+    return get_backend().get_distinct_persons()
+
+
+# ── 归属管理 CRUD ────────────────────────────────
+
+
+def get_projects() -> List[dict]:
+    """获取所有归属项目 [{id, name, created_at}]"""
+    return get_backend().get_projects()
+
+
+def add_project(name: str) -> int:
+    """创建归属项目，返回 id"""
+    return get_backend().add_project(name)
+
+
+def delete_project(project_id: int) -> bool:
+    """删除归属项目（无发票引用时）"""
+    return get_backend().delete_project(project_id)
+
+
+def get_persons() -> List[dict]:
+    """获取所有归属人 [{id, name, created_at}]"""
+    return get_backend().get_persons()
+
+
+def add_person(name: str) -> int:
+    """创建归属人，返回 id"""
+    return get_backend().add_person(name)
+
+
+def delete_person(person_id: int) -> bool:
+    """删除归属人（无发票引用时）"""
+    return get_backend().delete_person(person_id)
+
+
+# ── 附件 CRUD ─────────────────────────────────────
+
+
+def get_attachments(invoice_id: int) -> List[dict]:
+    return get_backend().get_attachments(invoice_id)
+
+
+def insert_attachment(attachment: dict) -> int:
+    return get_backend().insert_attachment(attachment)
+
+
+def delete_attachment(attachment_id: int) -> bool:
+    return get_backend().delete_attachment(attachment_id)
+
+
+def delete_attachments_by_invoice(invoice_id: int) -> int:
+    return get_backend().delete_attachments_by_invoice(invoice_id)
+
+
+def delete_invoice(invoice_id: int) -> bool:
+    return get_backend().delete_invoice(invoice_id)

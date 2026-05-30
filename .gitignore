@@ -4,3 +4,9 @@ __pycache__
 *.pyc
 *.log
 config.yaml
+.invoice-install
+
+
+# 构建产出
+build/
+dist/

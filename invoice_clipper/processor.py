@@ -10,7 +10,6 @@ from typing import Optional, Dict, Any
 
 from .database import (
     init_db, insert_invoice, is_duplicate, exists_by_invoice_number,
-    get_conn
 )
 from .file_utils import (
     ofd_to_pdf, build_archive_path, archive_invoice,
@@ -30,11 +29,10 @@ class InvoiceProcessor:
         self.archive_dir = Path(config["storage"]["base_dir"]).expanduser()
 
         # 确保目录存在
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.archive_dir.mkdir(parents=True, exist_ok=True)
 
-        # 初始化数据库
-        init_db(str(self.db_path))
+        # 初始化数据库（传完整配置，支持 SQLite / PostgreSQL）
+        init_db(self.cfg)
 
         # 初始化识别引擎（按优先级排序）
         self.engines = []
@@ -123,10 +121,10 @@ class InvoiceProcessor:
         inv_no = fields.get("invoice_number", "")
         amount = fields.get("amount_with_tax", 0)
         if inv_no:
-            if is_duplicate(str(self.db_path), inv_no, amount):
+            if is_duplicate(inv_no, amount):
                 logger.warning(f"重复发票（发票号+金额相同），跳过: {inv_no} / {amount:.2f}")
                 return None
-            if exists_by_invoice_number(str(self.db_path), inv_no):
+            if exists_by_invoice_number(inv_no):
                 logger.warning(f"重复发票（发票号已存在），跳过: {inv_no}")
                 return None
 
@@ -143,7 +141,7 @@ class InvoiceProcessor:
 
         # ── 6. 构建记录并入库 ──────────────────────────────
         record = self._build_record(fields, archived, source)
-        invoice_id = insert_invoice(str(self.db_path), record)
+        invoice_id = insert_invoice(record)
         record["id"] = invoice_id
 
         logger.info(

@@ -2,17 +2,20 @@
 {% block content %}
 
 <div class="page-header">
-  <h1>编辑发票 #{{ invoice.id }}</h1>
+  <div>
+    <h1>发票 #{{ invoice.id }}</h1>
+    <p>{{ invoice.seller_name or '未知销售方' }} · {{ invoice.invoice_number or '-' }}</p>
+  </div>
   <div class="btn-group">
     <form method="POST" action="/list/{{ invoice.id }}/toggle" style="display:inline;">
-      <button type="submit" class="btn btn-outline">
+      <button type="submit" class="btn btn-outline btn-sm">
         {{ '恢复为正常' if invoice.excluded else '标记为排除' }}
       </button>
     </form>
     <form method="POST" action="/list/{{ invoice.id }}/delete" style="display:inline;" onsubmit="return confirm('确认删除 #{{ invoice.id }}？删除后不可恢复，附件也会一并删除。')">
-      <button type="submit" class="btn btn-danger">删除发票</button>
+      <button type="submit" class="btn btn-danger btn-sm">删除发票</button>
     </form>
-    <a href="/list" class="btn btn-outline">返回列表</a>
+    <a href="/list" class="btn btn-outline btn-sm">返回列表</a>
   </div>
 </div>
 
@@ -52,11 +55,13 @@
   </div>
 
 </div>
-<button type="submit" class="btn btn-primary">保存修改</button>
+<div class="btn-group">
+  <button type="submit" class="btn btn-primary">保存修改</button>
+</div>
 </form>
 
 <!-- Attachments -->
-<div class="card" style="margin-top: 16px;">
+<div class="card">
   <h3>附件 ({{ attachments | length }})</h3>
 
   {% if attachments %}
@@ -65,45 +70,49 @@
     <div class="att-card">
       {% set is_img = att.filename and (att.filename.lower().endswith('.png') or att.filename.lower().endswith('.jpg') or att.filename.lower().endswith('.jpeg') or att.filename.lower().endswith('.bmp') or att.filename.lower().endswith('.webp')) %}
       {% if is_img %}
-      <img src="/static/file-icon.svg" alt="" onerror="this.style.display='none'">
-      <div class="att-icon">{{ att.filename.split('.')[-1].upper() }}</div>
+      <div class="att-img-wrap">
+        <img src="/attachments/{{ att.id }}/file" alt="{{ att.original_name or att.filename }}" loading="lazy" onerror="this.parentElement.innerHTML='<div class=att-icon>IMG</div>'">
+      </div>
       {% else %}
-      <div class="att-icon">{{ 'PDF' if att.filename and att.filename.lower().endswith('.pdf') else 'FILE' }}</div>
+      <div class="att-icon">{{ 'PDF' if att.filename and att.filename.lower().endswith('.pdf') else att.filename.split('.')[-1].upper() if att.filename and '.' in att.filename else 'FILE' }}</div>
       {% endif %}
       <div class="att-info">
         <div class="att-name">{{ att.original_name or att.filename }}</div>
-        <div>{{ att.file_type }} | {{ "%.0f" | format((att.file_size or 0) / 1024) }} KB</div>
+        <div class="att-label">{{ att.file_type }}</div>
+        <div style="margin-top: 2px;">{{ "%.0f" | format((att.file_size or 0) / 1024) }} KB</div>
       </div>
       <div class="att-actions">
         <form method="POST" action="/list/{{ invoice.id }}/attachments/{{ att.id }}/delete" onsubmit="return confirm('确认删除此附件？')">
-          <button type="submit" class="btn btn-danger" style="font-size: 0.75rem; padding: 3px 10px;">删除</button>
+          <button type="submit" class="btn btn-outline btn-sm">删除</button>
         </form>
       </div>
     </div>
     {% endfor %}
   </div>
   {% else %}
-  <p style="color: #999; font-size: 0.85rem;">暂未上传附件</p>
+  <p style="color: #a8a29e; font-size: 14px;">暂未上传附件</p>
   {% endif %}
 
   {% if invoice.stored_path %}
-  <form method="POST" action="/list/{{ invoice.id }}/attachments" enctype="multipart/form-data" style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #eee;">
+  <form method="POST" action="/list/{{ invoice.id }}/attachments" enctype="multipart/form-data" style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #e5e7eb;">
     <div class="form-row">
-      <div class="form-group">
+      <div class="form-group" style="flex: 1;">
+        <label>上传文件</label>
         <input type="file" name="files" multiple>
       </div>
       <div class="form-group">
+        <label>类型</label>
         <select name="file_type">
           <option value="other">其他</option>
           <option value="payment">付款凭证</option>
           <option value="receipt">收款凭证</option>
         </select>
       </div>
-      <button type="submit" class="btn btn-primary">上传附件</button>
+      <button type="submit" class="btn btn-primary" style="margin-bottom: 0;">上传附件</button>
     </div>
   </form>
   {% else %}
-  <p style="color: #999; font-size: 0.8rem; margin-top: 8px;">发票归档后才可上传附件</p>
+  <p style="color: #a8a29e; font-size: 13px; margin-top: 12px;">发票归档后才可上传附件</p>
   {% endif %}
 </div>
 

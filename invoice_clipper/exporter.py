@@ -133,8 +133,42 @@ def export_excel(invoices: List[dict], output_path: Path) -> Path:
     return output_path
 
 
-def export_merged_pdf(invoices: List[dict], output_path: Path) -> Optional[Path]:
-    """合并发票为单一 PDF"""
+def _insert_file_as_pdf_page(merged: fitz.Document, file_path: Path) -> bool:
+    """
+    将 PDF 或图片文件插入到合并文档中。
+    返回 True 表示成功。
+    """
+    # 方法1：尝试作为 PDF 打开
+    try:
+        doc = fitz.open(str(file_path))
+        # 确认是可读的 PDF（有页面）
+        if doc.page_count > 0:
+            merged.insert_pdf(doc)
+            doc.close()
+            return True
+        doc.close()
+    except Exception:
+        pass
+
+    # 方法2：尝试作为图片打开（PNG/JPG/BMP 等）
+    try:
+        pix = fitz.Pixmap(str(file_path))
+        # 创建一个与图片等尺寸的页面
+        page = merged.new_page(width=pix.width, height=pix.height)
+        page.insert_image(page.rect, pixmap=pix)
+        return True
+    except Exception as e:
+        logger.warning(f"无法读取文件（非 PDF/图片）: {file_path.name} - {e}")
+        return False
+
+
+def export_merged_pdf(invoices: List[dict], output_path: Path,
+                      attachments_map: Optional[dict] = None) -> Optional[Path]:
+    """
+    合并发票为单一 PDF。
+    若 attachments_map 提供（{invoice_id: [attachment_records]}），
+    则在每张发票页后紧跟其附件图片页。
+    """
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     merged = fitz.open()
@@ -144,13 +178,23 @@ def export_merged_pdf(invoices: List[dict], output_path: Path) -> Optional[Path]
         if not src.exists():
             logger.warning(f"文件不存在，跳过: {src}")
             continue
-        try:
-            doc = fitz.open(str(src))
-            merged.insert_pdf(doc)
-            doc.close()
+
+        # 插入发票页
+        if _insert_file_as_pdf_page(merged, src):
             count += 1
-        except Exception as e:
-            logger.warning(f"合并跳过 {src.name}: {e}")
+        else:
+            logger.warning(f"合并跳过（无法识别格式）: {src.name}")
+            continue
+
+        # 插入该发票的附件页（紧跟在发票后面）
+        if attachments_map and inv["id"] in attachments_map:
+            for att in attachments_map[inv["id"]]:
+                att_path = Path(att["stored_path"])
+                if not att_path.exists():
+                    continue
+                # 仅图片附件有视觉意义，PDF 附件跳过（避免叠加整本 PDF）
+                if att_path.suffix.lower() in (".png", ".jpg", ".jpeg", ".bmp", ".webp", ".gif"):
+                    _insert_file_as_pdf_page(merged, att_path)
 
     if count == 0:
         logger.warning("没有可合并的文件")
@@ -158,7 +202,8 @@ def export_merged_pdf(invoices: List[dict], output_path: Path) -> Optional[Path]
 
     merged.save(str(output_path))
     merged.close()
-    logger.info(f"合并 PDF 完成: {output_path}，共 {count} 张")
+    logger.info(f"合并 PDF 完成: {output_path}，共 {count} 张发票"
+                f"{' + 附件' if attachments_map else ''}")
     return output_path
 
 

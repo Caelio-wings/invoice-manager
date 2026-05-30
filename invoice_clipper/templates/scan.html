@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="card">
+  <h3>上传发票文件</h3>
+  <p style="color: #78716c; margin-bottom: 16px;">支持 PDF、OFD、图片 (PNG/JPG/BMP/TIFF)，可一次选择多个文件</p>
+  <form method="POST" enctype="multipart/form-data" id="scan-form">
+    <div class="upload-box">
+      <input type="file" name="files" multiple accept=".pdf,.ofd,.png,.jpg,.jpeg,.bmp,.tiff" style="font-size: 14px;">
+    </div>
+
+    <!-- 归属信息 -->
+    <div class="form-row" style="margin-top: 20px;">
+      <div class="form-group">
+        <label>归属项目</label>
+        <select name="belong_project">
+          <option value="">— 不选择 —</option>
+          {% for p in projects %}
+          <option value="{{ p.name }}">{{ p.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>归属人</label>
+        <select name="belong_person">
+          <option value="">— 不选择 —</option>
+          {% for p in persons %}
+          <option value="{{ p.name }}">{{ p.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+
+    <div style="margin-top: 16px;">
+      <button type="submit" class="btn btn-primary">开始识别</button>
+    </div>
+  </form>
+</div>
+
+<script>
+document.getElementById('scan-form').addEventListener('submit', function(e) {
+  const project = this.querySelector('[name="belong_project"]').value;
+  const person = this.querySelector('[name="belong_person"]').value;
+  if (!project && !person) {
+    if (!confirm('您未选择归属项目和归属人，是否继续？')) {
+      e.preventDefault();
+    }
+  }
+});
+</script>
+
+{% if results %}
+<div class="card">
+  <h3>处理结果</h3>
+  <div class="summary">
+    共 <strong>{{ summary.total_count }}</strong> 个文件，
+    成功 <span class="count-badge ok">{{ summary.ok_count }}</span>
+    失败 <span class="count-badge fail">{{ summary.total_count - summary.ok_count }}</span>
+  </div>
+</div>
+
+<div class="card" style="padding: 0; overflow: hidden;">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>状态</th>
+          <th>文件名</th>
+          <th>发票号码</th>
+          <th>开票日期</th>
+          <th>销售方</th>
+          <th>价税合计</th>
+          <th>归属项目</th>
+          <th>归属人</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in results %}
+        <tr>
+          <td class="center">
+            <span class="tag {{ 'tag-success' if r.ok else 'tag-danger' }}">{{ 'OK' if r.ok else 'FAIL' }}</span>
+          </td>
+          <td>{{ r.filename }}</td>
+          <td>{{ r.invoice_number }}</td>
+          <td>{{ r.invoice_date }}</td>
+          <td>{{ r.seller_name }}</td>
+          <td class="money">{{ "%.2f" | format(r.amount_with_tax|float) if r.amount_with_tax else '-' }}</td>
+          <td>{{ r.belong_project or '-' }}</td>
+          <td>{{ r.belong_person or '-' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}

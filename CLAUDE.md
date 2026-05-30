@@ -7,7 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 # Web UI (primary interface)
 python app.py                           # FastAPI server at http://localhost:8000
-# Or: uv run uvicorn app:app --reload --port 8000
+# Or: uv run uvicorn invoice_clipper.web:app --reload --port 8000
+# After pip install: invoice-manager-web
 
 # CLI
 python main.py scan                     # Scan configured watch_dirs for new invoices
@@ -17,6 +18,8 @@ python main.py process /path/to/invoice.pdf  # Process a single file
 python main.py export --from 2025-03-01 --to 2025-03-31 --format both
 python main.py exclude 3                # Mark invoice #3 as non-reimbursable
 python main.py include 3                # Restore invoice #3 as reimbursable
+python main.py init                     # Interactive setup wizard
+# After pip install: invoice-manager scan|list|query|...
 
 # Install (uv)
 uv sync

@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C c:/CodeSpace/invoice-manager ls-files config.yaml config.example.yaml)",
+      "Bash(git -C c:/CodeSpace/invoice-manager ls-files --error-unmatch config/config.yaml config/config.example.yaml config.yaml config.example.yaml)",
+      "Bash(git -C c:/CodeSpace/invoice-manager log --oneline -5)",
+      "Bash(git -C c:/CodeSpace/invoice-manager ls-files --others --exclude-standard)",
+      "Bash(git checkout *)",
+      "Bash(python -c \"from invoice_clipper import load_config; print\\('invoice_clipper OK'\\)\")",
+      "Bash(python -c \"from invoice_clipper.engines._utils import pdf_to_image, normalize_date, parse_number, infer_category, calculate_confidence; print\\('_utils OK'\\)\")",
+      "Bash(python -c \"import app; print\\('app.py OK'\\)\")",
+      "Bash(python -c \"import main; print\\('main.py OK'\\)\")",
+      "Bash(python -c ' *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8000/)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8000/scan)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8000/list)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8000/query)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8000/export)",
+      "Bash(curl -s http://localhost:8000/list)",
+      "Bash(taskkill //F //IM python.exe)",
+      "Bash(python -c \"import jinja2; print\\(jinja2.__version__\\); import starlette; print\\(starlette.__version__\\)\")",
+      "Bash(python -m uvicorn app:app --host 127.0.0.1 --port 8000)",
+      "Bash(python -c \"import starlette; print\\(starlette.__version__\\)\")",
+      "Bash(python main.py list)",
+      "Bash(PYTHONIOENCODING=utf-8 python main.py list)",
+      "Bash(git add *)",
+      "Bash(git rm *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git reset *)",
+      "Bash(.venv/Scripts/python.exe -m zipfile -l dist/invoice_manager-3.1.2-py3-none-any.whl)"
+    ]
+  }
+}

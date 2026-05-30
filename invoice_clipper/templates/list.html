@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="stats">
+  <div class="stat-card">
+    <div class="stat-label">发票总数</div>
+    <div class="stat-value">{{ stats.total }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">可报销</div>
+    <div class="stat-value positive">{{ stats.ok_count }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">已排除</div>
+    <div class="stat-value negative">{{ stats.excluded_count }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">可报销金额</div>
+    <div class="stat-value">{{ "¥%.2f" | format(stats.reimbursable_amount) }}</div>
+    <div class="stat-delta">总额 ¥{{ "%.2f" | format(stats.total_amount) }}</div>
+  </div>
+</div>
+
+<div class="card">
+  <form method="GET" action="/list">
+    <div class="form-row">
+      <div class="form-group" style="flex: 1; min-width: 220px;">
+        <label>搜索</label>
+        <input type="text" name="search" placeholder="销售方 / 购买方 / 发票号码 / 项目名称" value="{{ search }}">
+      </div>
+      <div class="form-group checkbox">
+        <input type="checkbox" name="status" value="正常" id="st_normal" {{ 'checked' if '正常' in status_filter else '' }}>
+        <label for="st_normal">正常</label>
+      </div>
+      <div class="form-group checkbox">
+        <input type="checkbox" name="status" value="排除" id="st_excluded" {{ 'checked' if '排除' in status_filter else '' }}>
+        <label for="st_excluded">排除</label>
+      </div>
+      <button type="submit" class="btn btn-primary">筛选</button>
+    </div>
+  </form>
+</div>
+
+{% if invoices %}
+<div class="card" style="padding: 0; overflow: hidden;">
+  <div class="table-wrap">
+    <table id="invoice-table">
+      <thead>
+        <tr>
+          <th data-sort="invoice_date" class="sorted-desc">开票日期<span class="sort-icon">▼</span></th>
+          <th data-sort="invoice_number">发票号码<span class="sort-icon">⇅</span></th>
+          <th data-sort="commodity_name">项目名称<span class="sort-icon">⇅</span></th>
+          <th data-sort="seller_name">销售方<span class="sort-icon">⇅</span></th>
+          <th data-sort="buyer_name">购买方<span class="sort-icon">⇅</span></th>
+          <th data-sort="amount_with_tax">价税合计<span class="sort-icon">⇅</span></th>
+          <th data-sort="belong_project">归属项目<span class="sort-icon">⇅</span></th>
+          <th data-sort="belong_person">归属人<span class="sort-icon">⇅</span></th>
+          <th data-sort="excluded">状态<span class="sort-icon">⇅</span></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for inv in invoices %}
+        {% set excluded = inv.excluded == 1 %}
+        <tr class="clickable {{ 'excluded' if excluded else '' }}" onclick="location.href='/list/{{ inv.id }}'">
+          <td>{{ inv.invoice_date or '-' }}</td>
+          <td>{{ inv.invoice_number or '-' }}</td>
+          <td>{{ inv.commodity_name or '-' }}</td>
+          <td>{{ inv.seller_name or '-' }}</td>
+          <td>{{ inv.buyer_name or '-' }}</td>
+          <td class="money">{{ "¥%.2f" | format(inv.amount_with_tax or 0) }}</td>
+          <td>{{ inv.belong_project or '-' }}</td>
+          <td>{{ inv.belong_person or '-' }}</td>
+          <td class="center"><span class="tag {{ 'tag-danger' if excluded else 'tag-success' }}">{{ '已排除' if excluded else '正常' }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Batch Operations -->
+<div class="batch-section">
+  <details>
+    <summary>批量操作</summary>
+    <form method="POST" action="/list/batch-toggle" style="margin-top: 8px;">
+      <div class="batch-checkboxes">
+        {% for inv in invoices %}
+        <label>
+          <input type="checkbox" name="ids" value="{{ inv.id }}"> #{{ inv.id }}
+        </label>
+        {% endfor %}
+      </div>
+      <div class="btn-group">
+        <button type="submit" name="action" value="exclude" class="btn btn-outline btn-sm">标记为排除</button>
+        <button type="submit" name="action" value="include" class="btn btn-outline btn-sm">恢复为正常</button>
+      </div>
+    </form>
+  </details>
+</div>
+
+<script>
+(function() {
+  const table = document.getElementById('invoice-table');
+  if (!table) return;
+  const tbody = table.querySelector('tbody');
+
+  // Parse all rows into data
+  function getCellValue(tr, idx) {
+    const td = tr.children[idx];
+    if (!td) return '';
+    const raw = td.textContent.trim();
+
+    // Try numeric: strip currency symbols and commas
+    const num = parseFloat(raw.replace(/[¥,\s]/g, ''));
+    if (!isNaN(num)) return num;
+
+    return raw;
+  }
+
+  function getColumnIndex(header) {
+    return Array.from(header.parentElement.children).indexOf(header);
+  }
+
+  function sortTable(colIdx, ascending) {
+    const rows = Array.from(tbody.querySelectorAll('tr'));
+
+    rows.sort(function(a, b) {
+      let va = getCellValue(a, colIdx);
+      let vb = getCellValue(b, colIdx);
+
+      // Handle dates (YYYY-MM-DD or YYYY-MM)
+      if (typeof va === 'string' && typeof vb === 'string') {
+        const da = Date.parse(va);
+        const db = Date.parse(vb);
+        if (!isNaN(da) && !isNaN(db)) {
+          va = da;
+          vb = db;
+        }
+      }
+
+      if (va < vb) return ascending ? -1 : 1;
+      if (va > vb) return ascending ? 1 : -1;
+      return 0;
+    });
+
+    rows.forEach(function(row) {
+      tbody.appendChild(row);
+    });
+  }
+
+  // Click handlers on headers
+  const headers = table.querySelectorAll('th[data-sort]');
+  headers.forEach(function(th) {
+    th.addEventListener('click', function() {
+      const colIdx = getColumnIndex(th);
+      const isAsc = th.classList.contains('sorted-asc');
+
+      // Clear all
+      headers.forEach(function(h) {
+        h.classList.remove('sorted-asc', 'sorted-desc');
+        const icon = h.querySelector('.sort-icon');
+        if (icon) icon.textContent = '⇅';
+      });
+
+      // Set new sort
+      const ascending = !isAsc;
+      th.classList.add(ascending ? 'sorted-asc' : 'sorted-desc');
+      const icon = th.querySelector('.sort-icon');
+      if (icon) icon.textContent = ascending ? '▲' : '▼';
+
+      sortTable(colIdx, ascending);
+    });
+  });
+})();
+</script>
+
+{% else %}
+<div class="card">
+  <div class="empty-state">
+    <p>暂无发票记录</p>
+    <p style="margin-top: 8px; font-size: 13px;">
+      <a href="/scan" style="color: #3ba6f1;">扫描上传</a> 第一张发票
+    </p>
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}
