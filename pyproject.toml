@@ -1,6 +1,6 @@
 [project]
 name = "invoice-manager"
-version = "3.1.3"
+version = "3.2.0"
 description = "智能发票管理工具 — 自动识别、归档、导出报销单"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -24,6 +24,7 @@ dependencies = [
     "fastapi>=0.115.0",
     "httpx>=0.27.0",
     "jinja2>=3.1.0",
+    "mcp>=1.27.2",
     "openpyxl>=3.1.0",
     "pymupdf>=1.24.0",
     "python-multipart>=0.0.9",
@@ -32,7 +33,6 @@ dependencies = [
 ]
 
 [project.scripts]
-invoice-manager = "invoice_clipper.__main__:cli_main"
 invoice-manager-web = "invoice_clipper.__main__:web_main"
 
 [project.optional-dependencies]
@@ -72,8 +72,6 @@ include = [
 ]
 # 排除根级遗留文件（/ 前缀锚定到项目根目录）
 exclude = [
-    "/app.py",
-    "/main.py",
     "/run.py",
     "/templates/",
     "/static/",

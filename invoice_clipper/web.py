@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""发票夹子 Web UI — FastAPI + Jinja2 (v3.1.3)"""
+"""发票夹子 Web UI — FastAPI + Jinja2 (v3.2.0)"""
 import re
 import json
 import shutil
@@ -25,20 +25,34 @@ from invoice_clipper import (
     InvoiceProcessor, export_excel, export_merged_pdf, build_export_label,
     build_attachment_path, next_attachment_seq,
 )
+from contextlib import asynccontextmanager
+
+from invoice_clipper.mcp_server import mcp as mcp_server
 
 # 包内资源路径（安装后模板/静态文件在包目录内）
 PKG_DIR = Path(__file__).parent
-app = FastAPI(title="发票夹子", version="3.1.3")
-app.mount("/static", StaticFiles(directory=str(PKG_DIR / "static")), name="static")
-templates = Jinja2Templates(directory=str(PKG_DIR / "templates"))
 
 
-@app.on_event("startup")
-def startup():
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """应用生命周期：加载配置 + 启动 MCP Streamable HTTP session manager"""
     cfg, cfg_path = load_config()
     app.state.config = cfg
     app.state.config_path = cfg_path
     init_db(cfg)
+
+    # 提前调用确保 _session_manager 已创建
+    _mcp_starlette = mcp_server.streamable_http_app()
+    async with mcp_server._session_manager.run():
+        yield  # 应用运行中
+
+
+app = FastAPI(title="发票夹子", version="3.2.0", lifespan=_lifespan)
+app.mount("/static", StaticFiles(directory=str(PKG_DIR / "static")), name="static")
+templates = Jinja2Templates(directory=str(PKG_DIR / "templates"))
+
+# 挂载 MCP Streamable HTTP 端点（AI Agent 接口）
+app.mount("/mcp", mcp_server.streamable_http_app())
 
 
 # ── Helpers ───────────────────────────────────────
@@ -563,7 +577,7 @@ def main():
     port = int(cfg.get("server", {}).get("port", 8000))
 
     url = f"http://{host}:{port}"
-    print(f"发票夹子 v3.1.3 正在启动 ...")
+    print(f"发票夹子 v3.2.0 正在启动 ...")
     print(f"   配置文件: {cfg_path}")
     print(f"   本地地址: {url}")
 

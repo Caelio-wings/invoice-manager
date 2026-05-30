@@ -1,5 +1,5 @@
 """
-发票夹子核心模块 - v3.1.3
+发票夹子核心模块 - v3.2.0
 提供发票处理、数据库操作、导出功能的统一入口
 """
 import os
@@ -68,6 +68,9 @@ DEFAULT_CONFIG = {
     "server": {
         "port": 8000,
         "host": "127.0.0.1",
+    },
+    "mcp": {
+        "transport": "http",      # http (Streamable HTTP) | sse | stdio
     },
     "watch_dirs": [],
     "ocr": {
