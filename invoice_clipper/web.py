@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""发票夹子 Web UI — FastAPI + Jinja2 (v3.2.0)"""
+"""发票夹子 Web UI — FastAPI + Jinja2 (v3.2.1)"""
 import re
 import json
 import shutil
@@ -47,7 +47,7 @@ async def _lifespan(app: FastAPI):
         yield  # 应用运行中
 
 
-app = FastAPI(title="发票夹子", version="3.2.0", lifespan=_lifespan)
+app = FastAPI(title="发票夹子", version="3.2.1", lifespan=_lifespan)
 app.mount("/static", StaticFiles(directory=str(PKG_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(PKG_DIR / "templates"))
 
@@ -310,11 +310,15 @@ def get_edit(request: Request, inv_id: int):
     if not inv:
         raise HTTPException(404, "发票不存在")
     attachments = get_attachments(inv_id)
+    projects = get_projects()
+    persons = get_persons()
     ctx = get_flash(request)
     ctx.update({
         "page": "list",
         "invoice": dict(inv),
         "attachments": attachments,
+        "projects": projects,
+        "persons": persons,
         "raw_json": json.dumps(dict(inv), ensure_ascii=False, indent=2, default=str),
     })
     return templates.TemplateResponse(request, "edit.html", ctx)
@@ -577,7 +581,7 @@ def main():
     port = int(cfg.get("server", {}).get("port", 8000))
 
     url = f"http://{host}:{port}"
-    print(f"发票夹子 v3.2.0 正在启动 ...")
+    print(f"发票夹子 v3.2.1 正在启动 ...")
     print(f"   配置文件: {cfg_path}")
     print(f"   本地地址: {url}")
 

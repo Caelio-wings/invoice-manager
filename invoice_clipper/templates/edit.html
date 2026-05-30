@@ -49,8 +49,18 @@
     <div class="form-group"><label>价税合计</label><input type="number" step="0.01" name="amount_with_tax" value="{{ invoice.amount_with_tax or 0 }}"></div>
     <div class="form-group"><label>税额</label><input type="number" step="0.01" name="tax_amount" value="{{ invoice.tax_amount or 0 }}"></div>
     <div class="form-group"><label>税率</label><input type="number" step="0.0001" name="tax_rate" value="{{ invoice.tax_rate or 0 }}"></div>
-    <div class="form-group"><label>归属项目</label><input type="text" name="belong_project" value="{{ invoice.belong_project or '' }}"></div>
-    <div class="form-group"><label>归属人</label><input type="text" name="belong_person" value="{{ invoice.belong_person or '' }}"></div>
+    <div class="form-group"><label>归属项目</label><select name="belong_project">
+        <option value="">— 不选择 —</option>
+        {% for p in projects %}
+        <option value="{{ p.name }}" {{ 'selected' if invoice.belong_project == p.name }}>{{ p.name }}</option>
+        {% endfor %}
+      </select></div>
+    <div class="form-group"><label>归属人</label><select name="belong_person">
+        <option value="">— 不选择 —</option>
+        {% for p in persons %}
+        <option value="{{ p.name }}" {{ 'selected' if invoice.belong_person == p.name }}>{{ p.name }}</option>
+        {% endfor %}
+      </select></div>
     <div class="form-group"><label>备注</label><input type="text" name="remark" value="{{ invoice.remark or '' }}"></div>
   </div>
 

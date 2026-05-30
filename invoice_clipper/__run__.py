@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-发票夹子 Web UI — 启动入口（v3.2.0）
+发票夹子 Web UI — 启动入口（v3.2.1）
 """
 import sys
 import os
