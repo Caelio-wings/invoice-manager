@@ -10,6 +10,11 @@ python app.py                           # FastAPI server at http://localhost:800
 # Or: uv run uvicorn invoice_clipper.web:app --reload --port 8000
 # After pip install: invoice-manager-web
 
+# Debug / dev (no process lock)
+python -m invoice_clipper                # 直接启动 Web UI，无进程锁
+python -m invoice_clipper.__run__ --debug  # 通过 __run__ 启动，跳过锁
+# After pip install: invoice-manager-web  # 安装版同样无锁
+
 # CLI
 python main.py scan                     # Scan configured watch_dirs for new invoices
 python main.py list                     # List all invoices in DB

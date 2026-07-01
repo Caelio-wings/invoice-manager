@@ -14,6 +14,15 @@
       <div class="form-group"><label>归属项目</label><input type="text" name="project" value="{{ filters.project }}"></div>
       <div class="form-group"><label>归属人</label><input type="text" name="person" value="{{ filters.person }}"></div>
       <div class="form-group checkbox"><input type="checkbox" name="only_included" value="1" id="qry_only" {{ 'checked' if filters.only_included else '' }}><label for="qry_only">仅可报销</label></div>
+      <div class="form-group">
+        <label>标签</label>
+        <select name="tag_ids" class="tag-filter-select">
+          <option value="">全部</option>
+          {% for tag in all_tags %}
+          <option value="{{ tag.id }}" {{ 'selected' if filters.tag_ids == tag.id|string else '' }}>{{ tag.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
       <button type="submit" class="btn btn-primary">查询</button>
     </div>
   </form>

@@ -136,6 +136,43 @@ class DatabaseBackend(ABC):
     def delete_invoice(self, invoice_id: int) -> bool:
         ...
 
+    # ── 标签系统 ──────────────────────────────────────
+
+    @abstractmethod
+    def get_tags(self) -> List[dict]:
+        """获取所有标签 [{id, name, color, created_at}]"""
+        ...
+
+    @abstractmethod
+    def add_tag(self, name: str, color: str = "#3b82f6") -> int:
+        """创建标签，返回 id"""
+        ...
+
+    @abstractmethod
+    def delete_tag(self, tag_id: int) -> bool:
+        """删除标签（级联删除关联关系）"""
+        ...
+
+    @abstractmethod
+    def get_invoice_tags(self, invoice_id: int) -> List[dict]:
+        """获取发票的所有标签 [{id, name, color}]"""
+        ...
+
+    @abstractmethod
+    def set_invoice_tags(self, invoice_id: int, tag_ids: List[int]):
+        """设置发票的标签（全量替换）"""
+        ...
+
+    @abstractmethod
+    def get_invoices_by_ids(self, ids: List[int]) -> List[dict]:
+        """根据 ID 列表批量获取发票"""
+        ...
+
+    @abstractmethod
+    def search_invoices_by_tags(self, tag_ids: List[int]) -> List[dict]:
+        """根据标签 ID 列表获取所有关联的发票"""
+        ...
+
 
 # ── SQLite 后端 ──────────────────────────────────
 
@@ -253,6 +290,27 @@ class SQLiteBackend(DatabaseBackend):
                     created_at TEXT NOT NULL
                 )
             """)
+            # 标签系统
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS tags (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT UNIQUE NOT NULL,
+                    color TEXT DEFAULT '#3b82f6',
+                    created_at TEXT NOT NULL
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS invoice_tags (
+                    invoice_id INTEGER NOT NULL,
+                    tag_id INTEGER NOT NULL,
+                    PRIMARY KEY (invoice_id, tag_id),
+                    FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE CASCADE,
+                    FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_invtag_invoice ON invoice_tags(invoice_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_invtag_tag ON invoice_tags(tag_id)")
+
             conn.execute("PRAGMA foreign_keys = ON")
             conn.commit()
         logger.info(f"SQLite 数据库初始化完成: {self.db_path}")
@@ -414,6 +472,73 @@ class SQLiteBackend(DatabaseBackend):
         self.delete_attachments_by_invoice(invoice_id)
         return self._execute_update("DELETE FROM invoices WHERE id=?", [invoice_id]) > 0
 
+    # ── 标签系统 ──────────────────────────────────────
+
+    def get_tags(self) -> List[dict]:
+        return self._fetchall("SELECT * FROM tags ORDER BY name ASC")
+
+    def add_tag(self, name: str, color: str = "#3b82f6") -> int:
+        return self._execute_insert(
+            "INSERT INTO tags (name, color, created_at) VALUES (:name, :color, :created_at)",
+            {"name": name.strip(), "color": color, "created_at": datetime.now().isoformat()}
+        )
+
+    def delete_tag(self, tag_id: int) -> bool:
+        # CASCADE 会自动删除 invoice_tags 中的关联记录
+        return self._execute_update("DELETE FROM tags WHERE id=?", [tag_id]) > 0
+
+    def get_invoice_tags(self, invoice_id: int) -> List[dict]:
+        return self._fetchall(
+            "SELECT t.id, t.name, t.color FROM tags t "
+            "JOIN invoice_tags it ON t.id = it.tag_id "
+            "WHERE it.invoice_id = ? ORDER BY t.name",
+            [invoice_id]
+        )
+
+    def set_invoice_tags(self, invoice_id: int, tag_ids: List[int]):
+        self._execute("DELETE FROM invoice_tags WHERE invoice_id=?", [invoice_id])
+        for tid in tag_ids:
+            self._execute(
+                "INSERT OR IGNORE INTO invoice_tags (invoice_id, tag_id) VALUES (?, ?)",
+                [invoice_id, tid]
+            )
+
+    def get_invoices_by_ids(self, ids: List[int]) -> List[dict]:
+        if not ids:
+            return []
+        placeholders = ",".join("?" * len(ids))
+        return self._fetchall(
+            f"SELECT * FROM invoices WHERE id IN ({placeholders}) ORDER BY invoice_date ASC",
+            ids
+        )
+
+    def search_invoices_by_tags(self, tag_ids: List[int]) -> List[dict]:
+        if not tag_ids:
+            return []
+        placeholders = ",".join("?" * len(tag_ids))
+        return self._fetchall(
+            "SELECT DISTINCT i.* FROM invoices i "
+            "JOIN invoice_tags it ON i.id = it.invoice_id "
+            f"WHERE it.tag_id IN ({placeholders}) "
+            "ORDER BY i.invoice_date ASC",
+            tag_ids
+        )
+
+    def get_all_invoice_tags(self) -> dict:
+        """返回 {invoice_id: [{id, name, color}, ...]} 映射，供列表预加载使用"""
+        rows = self._fetchall(
+            "SELECT it.invoice_id, t.id, t.name, t.color "
+            "FROM invoice_tags it JOIN tags t ON it.tag_id = t.id "
+            "ORDER BY t.name"
+        )
+        result: dict = {}
+        for r in rows:
+            inv_id = r["invoice_id"]
+            if inv_id not in result:
+                result[inv_id] = []
+            result[inv_id].append({"id": r["id"], "name": r["name"], "color": r["color"]})
+        return result
+
 
 # ── PostgreSQL 后端 ──────────────────────────────
 
@@ -567,6 +692,29 @@ class PostgreSQLBackend(DatabaseBackend):
                         created_at TEXT NOT NULL
                     )
                 """)
+                # 标签系统
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS tags (
+                        id SERIAL PRIMARY KEY,
+                        name TEXT UNIQUE NOT NULL,
+                        color TEXT DEFAULT '#3b82f6',
+                        created_at TEXT NOT NULL
+                    )
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS invoice_tags (
+                        invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+                        tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+                        PRIMARY KEY (invoice_id, tag_id)
+                    )
+                """)
+                cur.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_invtag_invoice ON invoice_tags(invoice_id)
+                """)
+                cur.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_invtag_tag ON invoice_tags(tag_id)
+                """)
+
             conn.commit()
         logger.info(f"PostgreSQL 数据库初始化完成: {self.pg_config['host']}/{self.pg_config['dbname']}")
 
@@ -730,3 +878,69 @@ class PostgreSQLBackend(DatabaseBackend):
     def delete_invoice(self, invoice_id: int) -> bool:
         self.delete_attachments_by_invoice(invoice_id)
         return self._execute_update("DELETE FROM invoices WHERE id=%s", [invoice_id]) > 0
+
+    # ── 标签系统 ──────────────────────────────────────
+
+    def get_tags(self) -> List[dict]:
+        return self._fetchall("SELECT * FROM tags ORDER BY name ASC")
+
+    def add_tag(self, name: str, color: str = "#3b82f6") -> int:
+        return self._execute_insert(
+            "INSERT INTO tags (name, color, created_at) VALUES (%s, %s, %s) RETURNING id",
+            [name.strip(), color, datetime.now().isoformat()]
+        )
+
+    def delete_tag(self, tag_id: int) -> bool:
+        return self._execute_update("DELETE FROM tags WHERE id=%s", [tag_id]) > 0
+
+    def get_invoice_tags(self, invoice_id: int) -> List[dict]:
+        return self._fetchall(
+            "SELECT t.id, t.name, t.color FROM tags t "
+            "JOIN invoice_tags it ON t.id = it.tag_id "
+            "WHERE it.invoice_id = %s ORDER BY t.name",
+            [invoice_id]
+        )
+
+    def set_invoice_tags(self, invoice_id: int, tag_ids: List[int]):
+        self._execute("DELETE FROM invoice_tags WHERE invoice_id=%s", [invoice_id])
+        for tid in tag_ids:
+            self._execute(
+                "INSERT INTO invoice_tags (invoice_id, tag_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                [invoice_id, tid]
+            )
+
+    def get_invoices_by_ids(self, ids: List[int]) -> List[dict]:
+        if not ids:
+            return []
+        placeholders = ",".join("%s" for _ in ids)
+        return self._fetchall(
+            f"SELECT * FROM invoices WHERE id IN ({placeholders}) ORDER BY invoice_date ASC",
+            ids
+        )
+
+    def search_invoices_by_tags(self, tag_ids: List[int]) -> List[dict]:
+        if not tag_ids:
+            return []
+        placeholders = ",".join("%s" for _ in tag_ids)
+        return self._fetchall(
+            "SELECT DISTINCT i.* FROM invoices i "
+            "JOIN invoice_tags it ON i.id = it.invoice_id "
+            f"WHERE it.tag_id IN ({placeholders}) "
+            "ORDER BY i.invoice_date ASC",
+            tag_ids
+        )
+
+    def get_all_invoice_tags(self) -> dict:
+        """返回 {invoice_id: [{id, name, color}, ...]} 映射"""
+        rows = self._fetchall(
+            "SELECT it.invoice_id, t.id, t.name, t.color "
+            "FROM invoice_tags it JOIN tags t ON it.tag_id = t.id "
+            "ORDER BY t.name"
+        )
+        result: dict = {}
+        for r in rows:
+            inv_id = r["invoice_id"]
+            if inv_id not in result:
+                result[inv_id] = []
+            result[inv_id].append({"id": r["id"], "name": r["name"], "color": r["color"]})
+        return result

@@ -1,5 +1,5 @@
 """
-发票夹子核心模块 - v3.2.1
+发票夹子核心模块 - v3.3.0
 提供发票处理、数据库操作、导出功能的统一入口
 """
 import os
@@ -31,9 +31,18 @@ from .database import (
     delete_attachment,
     delete_attachments_by_invoice,
     delete_invoice,
+    get_tags,
+    add_tag,
+    delete_tag,
+    get_invoice_tags,
+    set_invoice_tags,
+    get_invoices_by_ids,
+    search_invoices_by_tags,
+    get_all_invoice_tags,
 )
 from .db_backends import DatabaseBackend, SQLiteBackend, PostgreSQLBackend
-from .exporter import export_excel, export_merged_pdf, build_export_label
+from .exporter import export_excel, export_merged_pdf, build_export_label, export_zip_sources
+from .matcher import find_best_match, find_multiple_candidates
 from .file_utils import (
     ofd_to_pdf, extract_text_from_pdf,
     build_archive_path, archive_invoice,
@@ -207,8 +216,14 @@ __all__ = [
     "get_attachments", "insert_attachment",
     "delete_attachment", "delete_attachments_by_invoice",
     "delete_invoice",
+    # 标签系统
+    "get_tags", "add_tag", "delete_tag",
+    "get_invoice_tags", "set_invoice_tags",
+    "get_invoices_by_ids", "search_invoices_by_tags", "get_all_invoice_tags",
     # 导出
-    "export_excel", "export_merged_pdf", "build_export_label",
+    "export_excel", "export_merged_pdf", "build_export_label", "export_zip_sources",
+    # 凑票
+    "find_best_match", "find_multiple_candidates",
     # 文件工具
     "ofd_to_pdf", "extract_text_from_pdf",
     "build_archive_path", "archive_invoice",

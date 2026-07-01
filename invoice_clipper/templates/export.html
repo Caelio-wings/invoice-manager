@@ -3,27 +3,62 @@
 
 <div class="card">
   <h3>导出报销单</h3>
-  <p style="color: #78716c; margin-bottom: 16px;">Excel 明细表始终生成。可选合并发票 PDF 及附件打包下载。</p>
+  <p style="color: #78716c; margin-bottom: 16px;">Excel 明细表始终生成。可选合并 PDF 或打包源文件。</p>
+
+  {% if selected_invoices %}
+  <div class="selected-inv-summary">
+    已从列表选中 <strong>{{ selected_invoices | length }}</strong> 张发票进行导出，
+    可报销合计 <strong>¥{{ "%.2f" | format(selected_invoices | sum(attribute='amount_with_tax') or 0) }}</strong>
+  </div>
+  {% endif %}
+
   <form method="POST" action="/export">
+    {% if selected_ids %}
+    <input type="hidden" name="selected_ids" value="{{ selected_ids }}">
+    {% endif %}
+
     <div class="form-row">
-      <div class="form-group"><label>开始日期</label><input type="date" name="date_from" value="{{ filters.date_from }}"></div>
-      <div class="form-group"><label>结束日期</label><input type="date" name="date_to" value="{{ filters.date_to }}"></div>
-      <div class="form-group"><label>销售方</label><input type="text" name="seller" value="{{ filters.seller }}" placeholder="模糊搜索"></div>
-      <div class="form-group"><label>购买方</label><input type="text" name="buyer" value="{{ filters.buyer }}" placeholder="模糊搜索"></div>
+      <div class="form-group"><label>开始日期</label><input type="date" name="date_from" value="{{ filters.date_from }}" {{ 'disabled' if selected_ids }}></div>
+      <div class="form-group"><label>结束日期</label><input type="date" name="date_to" value="{{ filters.date_to }}" {{ 'disabled' if selected_ids }}></div>
+      <div class="form-group"><label>销售方</label><input type="text" name="seller" value="{{ filters.seller }}" placeholder="模糊搜索" {{ 'disabled' if selected_ids }}></div>
+      <div class="form-group"><label>购买方</label><input type="text" name="buyer" value="{{ filters.buyer }}" placeholder="模糊搜索" {{ 'disabled' if selected_ids }}></div>
     </div>
     <div class="form-row">
-      <div class="form-group"><label>归属项目</label><input type="text" name="project" value="{{ filters.project }}"></div>
-      <div class="form-group"><label>归属人</label><input type="text" name="person" value="{{ filters.person }}"></div>
+      <div class="form-group"><label>归属项目</label><input type="text" name="project" value="{{ filters.project }}" {{ 'disabled' if selected_ids }}></div>
+      <div class="form-group"><label>归属人</label><input type="text" name="person" value="{{ filters.person }}" {{ 'disabled' if selected_ids }}></div>
+    </div>
+
+    {% if not selected_ids %}
+    <div class="form-row" style="margin-top: 8px;">
       <div class="form-group checkbox">
-        <input type="checkbox" name="include_pdf" value="on" id="exp_pdf" checked>
-        <label for="exp_pdf">合并发票 PDF</label>
-      </div>
-      <div class="form-group checkbox">
-        <input type="checkbox" name="include_attachments" value="on" id="exp_att">
-        <label for="exp_att">随附附件打包</label>
+        <input type="checkbox" name="only_included" value="1" id="exp_only" checked>
+        <label for="exp_only">仅可报销</label>
       </div>
     </div>
-    <div class="btn-group">
+    {% endif %}
+
+    <!-- Export Mode -->
+    <div style="margin-top: 20px; border-top: 1px solid #e5e7eb; padding-top: 16px;">
+      <h4 style="font-size: 14px; font-weight: 500; color: #0c0a09; margin-bottom: 8px;">导出内容</h4>
+      <div class="export-mode-group">
+        <label><input type="radio" name="export_mode" value="invoice_only" checked> 仅导出发票</label>
+        <label><input type="radio" name="export_mode" value="with_attachments"> 发票 + 附件</label>
+      </div>
+    </div>
+
+    <!-- Package Mode -->
+    <div style="margin-top: 12px;">
+      <h4 style="font-size: 14px; font-weight: 500; color: #0c0a09; margin-bottom: 8px;">打包方式</h4>
+      <div class="export-mode-group">
+        <label><input type="radio" name="package_mode" value="merged_pdf" checked> 合并 PDF</label>
+        <label><input type="radio" name="package_mode" value="source_zip"> 源文件打包 (ZIP)</label>
+        <label><input type="radio" name="package_mode" value="both"> 两者都要</label>
+      </div>
+      <div class="export-mode-hint">合并 PDF：所有发票（和附件图片）合为一个 PDF 文件</div>
+      <div class="export-mode-hint">源文件打包：保留原始 PDF/图片文件，打包为 ZIP</div>
+    </div>
+
+    <div class="btn-group" style="margin-top: 20px;">
       <button type="submit" class="btn btn-primary">开始导出</button>
     </div>
   </form>

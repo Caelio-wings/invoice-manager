@@ -47,6 +47,7 @@
     <table id="invoice-table">
       <thead>
         <tr>
+          <th class="checkbox-cell"><input type="checkbox" id="select-all" title="全选"></th>
           <th data-sort="invoice_date" class="sorted-desc">开票日期<span class="sort-icon">▼</span></th>
           <th data-sort="invoice_number">发票号码<span class="sort-icon">⇅</span></th>
           <th data-sort="commodity_name">项目名称<span class="sort-icon">⇅</span></th>
@@ -56,21 +57,43 @@
           <th data-sort="belong_project">归属项目<span class="sort-icon">⇅</span></th>
           <th data-sort="belong_person">归属人<span class="sort-icon">⇅</span></th>
           <th data-sort="excluded">状态<span class="sort-icon">⇅</span></th>
+          <th>标签</th>
+          <th>操作</th>
         </tr>
       </thead>
       <tbody>
         {% for inv in invoices %}
         {% set excluded = inv.excluded == 1 %}
-        <tr class="clickable {{ 'excluded' if excluded else '' }}" onclick="location.href='/list/{{ inv.id }}'">
-          <td>{{ inv.invoice_date or '-' }}</td>
-          <td>{{ inv.invoice_number or '-' }}</td>
-          <td>{{ inv.commodity_name or '-' }}</td>
-          <td>{{ inv.seller_name or '-' }}</td>
-          <td>{{ inv.buyer_name or '-' }}</td>
-          <td class="money">{{ "¥%.2f" | format(inv.amount_with_tax or 0) }}</td>
-          <td>{{ inv.belong_project or '-' }}</td>
-          <td>{{ inv.belong_person or '-' }}</td>
-          <td class="center"><span class="tag {{ 'tag-danger' if excluded else 'tag-success' }}">{{ '已排除' if excluded else '正常' }}</span></td>
+        <tr class="{{ 'excluded' if excluded else '' }}">
+          <td class="checkbox-cell"><input type="checkbox" class="row-checkbox" value="{{ inv.id }}"></td>
+          <td class="clickable" onclick="location.href='/list/{{ inv.id }}'">{{ inv.invoice_date or '-' }}</td>
+          <td class="clickable" onclick="location.href='/list/{{ inv.id }}'">{{ inv.invoice_number or '-' }}</td>
+          <td class="clickable" onclick="location.href='/list/{{ inv.id }}'">{{ inv.commodity_name or '-' }}</td>
+          <td class="clickable" onclick="location.href='/list/{{ inv.id }}'">{{ inv.seller_name or '-' }}</td>
+          <td class="clickable" onclick="location.href='/list/{{ inv.id }}'">{{ inv.buyer_name or '-' }}</td>
+          <td class="money clickable" onclick="location.href='/list/{{ inv.id }}'">{{ "¥%.2f" | format(inv.amount_with_tax or 0) }}</td>
+          <td class="clickable" onclick="location.href='/list/{{ inv.id }}'">{{ inv.belong_project or '-' }}</td>
+          <td class="clickable" onclick="location.href='/list/{{ inv.id }}'">{{ inv.belong_person or '-' }}</td>
+          <td class="center clickable" onclick="location.href='/list/{{ inv.id }}'"><span class="tag {{ 'tag-danger' if excluded else 'tag-success' }}">{{ '已排除' if excluded else '正常' }}</span></td>
+          <td class="tag-cell clickable" onclick="location.href='/list/{{ inv.id }}'">
+            {% set inv_tags = invoice_tags.get(inv.id, []) %}
+            {% for t in inv_tags[:3] %}
+            <span class="tag-badge-sm" style="background: {{ t.color }}20; color: {{ t.color }}; border: 1px solid {{ t.color }}40;">{{ t.name }}</span>
+            {% endfor %}
+            {% if inv_tags | length > 3 %}
+            <span class="tag-more">+{{ inv_tags | length - 3 }}</span>
+            {% endif %}
+          </td>
+          <td class="action-cell">
+            <form method="POST" action="/list/{{ inv.id }}/toggle" style="display:inline;" title="{{ '恢复为正常' if excluded else '标记为排除' }}">
+              <button type="submit" class="btn-icon" style="color: {{ '#991b1b' if not excluded else '#166534' }};">
+                {{ '⊘' if not excluded else '✓' }}
+              </button>
+            </form>
+            <form method="POST" action="/list/{{ inv.id }}/delete" style="display:inline;" title="删除" onsubmit="return confirm('确认删除 #{{ inv.id }}？')">
+              <button type="submit" class="btn-icon danger">✕</button>
+            </form>
+          </td>
         </tr>
         {% endfor %}
       </tbody>
@@ -78,24 +101,35 @@
   </div>
 </div>
 
-<!-- Batch Operations -->
-<div class="batch-section">
-  <details>
-    <summary>批量操作</summary>
-    <form method="POST" action="/list/batch-toggle" style="margin-top: 8px;">
-      <div class="batch-checkboxes">
-        {% for inv in invoices %}
-        <label>
-          <input type="checkbox" name="ids" value="{{ inv.id }}"> #{{ inv.id }}
-        </label>
+<!-- Floating Batch Toolbar -->
+<div id="batch-toolbar" class="batch-toolbar">
+  <span class="batch-count">已选 <strong id="batch-count-num">0</strong> 张</span>
+  <form id="batch-form" method="POST" style="display:inline-flex; align-items:center; gap:8px; flex-wrap:wrap;">
+    <input type="hidden" name="ids" id="batch-ids-input" value="">
+    
+    <button type="submit" formaction="/list/batch-toggle?action=exclude" class="btn btn-outline btn-sm" onclick="return fillBatchIds(this)">标记排除</button>
+    <button type="submit" formaction="/list/batch-toggle?action=include" class="btn btn-outline btn-sm" onclick="return fillBatchIds(this)">恢复正常</button>
+    <button type="submit" formaction="/list/batch-delete" class="btn btn-danger btn-sm" onclick="return fillBatchIds(this) && confirm('确认批量删除选中的发票？')">批量删除</button>
+    
+    <span class="batch-assign-popup">
+      <select name="belong_project" id="batch-project">
+        <option value="">项目</option>
+        {% for p in projects %}
+        <option value="{{ p.name }}">{{ p.name }}</option>
         {% endfor %}
-      </div>
-      <div class="btn-group">
-        <button type="submit" name="action" value="exclude" class="btn btn-outline btn-sm">标记为排除</button>
-        <button type="submit" name="action" value="include" class="btn btn-outline btn-sm">恢复为正常</button>
-      </div>
-    </form>
-  </details>
+      </select>
+      <select name="belong_person" id="batch-person">
+        <option value="">归属人</option>
+        {% for p in persons %}
+        <option value="{{ p.name }}">{{ p.name }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" formaction="/list/batch-assign" class="btn btn-outline btn-sm" onclick="return fillBatchIds(this)">设置归属</button>
+    </span>
+
+    <a id="batch-export-link" href="#" class="btn btn-outline btn-sm">导出选中</a>
+  </form>
+  <button class="btn btn-outline btn-sm" onclick="clearSelection()" style="margin-left:4px;">取消选择</button>
 </div>
 
 <script>
@@ -103,17 +137,98 @@
   const table = document.getElementById('invoice-table');
   if (!table) return;
   const tbody = table.querySelector('tbody');
+  const selectAll = document.getElementById('select-all');
+  const toolbar = document.getElementById('batch-toolbar');
+  const countSpan = document.getElementById('batch-count-num');
 
-  // Parse all rows into data
+  // Get all row checkboxes
+  function getCheckboxes() {
+    return tbody.querySelectorAll('.row-checkbox');
+  }
+
+  function updateToolbar() {
+    const checked = Array.from(getCheckboxes()).filter(cb => cb.checked);
+    const count = checked.length;
+    countSpan.textContent = count;
+    toolbar.classList.toggle('visible', count > 0);
+  }
+
+  // Select all / deselect all
+  if (selectAll) {
+    selectAll.addEventListener('change', function() {
+      const checked = this.checked;
+      getCheckboxes().forEach(cb => cb.checked = checked);
+      updateToolbar();
+    });
+  }
+
+  // Individual checkbox change
+  getCheckboxes().forEach(function(cb) {
+    cb.addEventListener('change', updateToolbar);
+  });
+
+  // Update toolbar on page load (e.g. after form submit)
+  updateToolbar();
+})();
+
+function getSelectedIds() {
+  const checkboxes = document.querySelectorAll('#invoice-table .row-checkbox:checked');
+  return Array.from(checkboxes).map(cb => cb.value);
+}
+
+function fillBatchIds(btn) {
+  const ids = getSelectedIds();
+  if (ids.length === 0) {
+    alert('请先选择发票');
+    return false;
+  }
+  // Create or update hidden ids inputs in the form
+  const form = btn.closest('form');
+  // Remove existing ids inputs
+  form.querySelectorAll('input[name="ids"]').forEach(el => el.remove());
+  ids.forEach(function(id) {
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = 'ids';
+    input.value = id;
+    form.appendChild(input);
+  });
+  return true;
+}
+
+function clearSelection() {
+  document.querySelectorAll('#invoice-table .row-checkbox:checked').forEach(cb => cb.checked = false);
+  if (document.getElementById('select-all')) {
+    document.getElementById('select-all').checked = false;
+  }
+  document.getElementById('batch-toolbar').classList.remove('visible');
+}
+
+// Update export link when selection changes
+document.addEventListener('change', function(e) {
+  if (e.target.classList.contains('row-checkbox') || e.target.id === 'select-all') {
+    const ids = getSelectedIds();
+    const exportLink = document.getElementById('batch-export-link');
+    if (ids.length > 0) {
+      exportLink.href = '/export?ids=' + ids.join(',');
+    } else {
+      exportLink.href = '#';
+    }
+  }
+});
+
+// ── Sorting ──────────────────────────────────────
+(function() {
+  const table = document.getElementById('invoice-table');
+  if (!table) return;
+  const tbody = table.querySelector('tbody');
+
   function getCellValue(tr, idx) {
     const td = tr.children[idx];
     if (!td) return '';
     const raw = td.textContent.trim();
-
-    // Try numeric: strip currency symbols and commas
     const num = parseFloat(raw.replace(/[¥,\s]/g, ''));
     if (!isNaN(num)) return num;
-
     return raw;
   }
 
@@ -123,51 +238,35 @@
 
   function sortTable(colIdx, ascending) {
     const rows = Array.from(tbody.querySelectorAll('tr'));
-
     rows.sort(function(a, b) {
       let va = getCellValue(a, colIdx);
       let vb = getCellValue(b, colIdx);
-
-      // Handle dates (YYYY-MM-DD or YYYY-MM)
       if (typeof va === 'string' && typeof vb === 'string') {
         const da = Date.parse(va);
         const db = Date.parse(vb);
-        if (!isNaN(da) && !isNaN(db)) {
-          va = da;
-          vb = db;
-        }
+        if (!isNaN(da) && !isNaN(db)) { va = da; vb = db; }
       }
-
       if (va < vb) return ascending ? -1 : 1;
       if (va > vb) return ascending ? 1 : -1;
       return 0;
     });
-
-    rows.forEach(function(row) {
-      tbody.appendChild(row);
-    });
+    rows.forEach(function(row) { tbody.appendChild(row); });
   }
 
-  // Click handlers on headers
   const headers = table.querySelectorAll('th[data-sort]');
   headers.forEach(function(th) {
     th.addEventListener('click', function() {
       const colIdx = getColumnIndex(th);
       const isAsc = th.classList.contains('sorted-asc');
-
-      // Clear all
       headers.forEach(function(h) {
         h.classList.remove('sorted-asc', 'sorted-desc');
         const icon = h.querySelector('.sort-icon');
         if (icon) icon.textContent = '⇅';
       });
-
-      // Set new sort
       const ascending = !isAsc;
       th.classList.add(ascending ? 'sorted-asc' : 'sorted-desc');
       const icon = th.querySelector('.sort-icon');
       if (icon) icon.textContent = ascending ? '▲' : '▼';
-
       sortTable(colIdx, ascending);
     });
   });

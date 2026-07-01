@@ -685,3 +685,275 @@ details pre {
   .att-grid { justify-content: center; }
   .att-card { width: calc(50% - 8px); min-width: 130px; }
 }
+
+/* ── Tag Badge System ───────────────────────────── */
+.tag-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 9999px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.tag-badge-sm {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  line-height: 1.6;
+}
+.tag-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.tag-cell {
+  max-width: 140px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  align-items: center;
+}
+.tag-cell .tag-badge-sm {
+  font-size: 10px;
+  padding: 0 6px;
+}
+.tag-more {
+  font-size: 10px;
+  color: #a8a29e;
+  padding: 0 4px;
+}
+.tag-select-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+.tag-checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  padding: 2px 0;
+}
+.tag-checkbox-label input[type="checkbox"] {
+  accent-color: #3ba6f1;
+}
+.tag-filter-select {
+  padding: 8px 12px;
+  border: 1px solid #d6d3d1;
+  border-radius: 8px;
+  background: #ffffff;
+  font-size: 14px;
+  color: #0c0a09;
+  min-width: 140px;
+}
+
+/* ── Inline form helper ─────────────────────────── */
+.form-inline .form-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+}
+.form-inline .form-group {
+  margin-bottom: 0;
+}
+
+/* ── Batch Action Toolbar ───────────────────────── */
+.batch-toolbar {
+  display: none;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: #ffffff;
+  border-top: 1px solid #e5e7eb;
+  box-shadow: 0 -4px 16px rgba(0,0,0,0.08);
+  padding: 12px 24px;
+  z-index: 200;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.batch-toolbar.visible {
+  display: flex;
+}
+.batch-toolbar .batch-count {
+  font-size: 14px;
+  font-weight: 500;
+  color: #0c0a09;
+  margin-right: 8px;
+  white-space: nowrap;
+}
+.batch-toolbar .btn-group {
+  margin: 0;
+}
+.batch-toolbar .btn {
+  margin: 0;
+}
+.batch-assign-popup {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.batch-assign-popup select {
+  padding: 6px 10px;
+  border: 1px solid #d6d3d1;
+  border-radius: 6px;
+  font-size: 13px;
+  background: #ffffff;
+}
+
+/* ── Quick Action Buttons in table ──────────────── */
+.action-cell {
+  white-space: nowrap;
+  text-align: center;
+  min-width: 60px;
+}
+.action-cell .btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #78716c;
+  font-size: 14px;
+  transition: all 0.15s;
+}
+.action-cell .btn-icon:hover {
+  background: #f5f5f4;
+  color: #0c0a09;
+}
+.action-cell .btn-icon.danger:hover {
+  background: #fef2f2;
+  color: #dc2626;
+}
+
+/* ── Checkbox column in table ───────────────────── */
+td.checkbox-cell, th.checkbox-cell {
+  width: 40px;
+  text-align: center;
+  padding: 8px 4px;
+}
+td.checkbox-cell input[type="checkbox"],
+th.checkbox-cell input[type="checkbox"] {
+  accent-color: #3ba6f1;
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+/* ── Clickable row with checkbox support ────────── */
+tr.clickable { cursor: pointer; }
+tr.clickable td { position: relative; }
+tr.clickable td.checkbox-cell { cursor: default; }
+tr.clickable td.checkbox-cell input { pointer-events: auto; }
+tr.clickable td:not(.checkbox-cell):not(.action-cell) {
+  cursor: pointer;
+}
+
+/* ── Match Amount Page ──────────────────────────── */
+.match-controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.match-result-card {
+  background: #f0f7fe;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  padding: 20px;
+  margin-bottom: 16px;
+}
+.match-result-card .match-summary {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1e40af;
+  margin-bottom: 12px;
+}
+.match-result-card .match-detail {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+  color: #78716c;
+  font-size: 14px;
+}
+.match-result-card .match-detail span {
+  font-weight: 500;
+  color: #0c0a09;
+}
+.match-alt-card {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 16px 20px;
+  margin-bottom: 12px;
+  transition: box-shadow 0.15s;
+}
+.match-alt-card:hover { box-shadow: rgba(0,0,0,0.05) 0px 4px 12px 0px; }
+.match-alt-card .match-alt-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.match-alt-card .match-alt-header h4 {
+  font-size: 14px;
+  font-weight: 500;
+  color: #0c0a09;
+}
+
+/* ── Export Mode Options ────────────────────────── */
+.export-mode-group {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+  padding: 12px 0;
+  margin-bottom: 8px;
+}
+.export-mode-group label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  color: #0c0a09;
+  cursor: pointer;
+}
+.export-mode-group input[type="radio"] {
+  accent-color: #3ba6f1;
+}
+.export-mode-hint {
+  font-size: 12px;
+  color: #a8a29e;
+  margin-left: 22px;
+  margin-top: -4px;
+  margin-bottom: 8px;
+}
+
+/* ── Selected invoices summary ──────────────────── */
+.selected-inv-summary {
+  background: #fafaf9;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: #78716c;
+}
+.selected-inv-summary strong {
+  color: #0c0a09;
+}

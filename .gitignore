@@ -6,6 +6,12 @@ __pycache__
 config.yaml
 .invoice-install
 
+# 数据文件
+data/
+
+# 编辑器 / 工具元数据
+.reasonix/
+
 
 # 构建产出
 build/

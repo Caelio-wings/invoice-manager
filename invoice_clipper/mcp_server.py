@@ -1,5 +1,5 @@
 """
-发票夹子 MCP Server (v1.0)
+发票夹子 MCP Server (v1.1) — 标签支持
 
 通过 MCP (Model Context Protocol) 将发票管理器功能暴露为 AI Agent 可调用的工具。
 
@@ -26,6 +26,7 @@ from invoice_clipper import (
     get_attachments,
     get_projects, add_project, delete_project,
     get_persons, add_person, delete_person,
+    get_tags, add_tag, delete_tag, get_invoice_tags, set_invoice_tags,
     InvoiceProcessor, export_excel, export_merged_pdf, build_export_label,
 )
 
@@ -536,6 +537,88 @@ def delete_person_tool(person_id: int) -> str:
     if ok:
         return json.dumps({"success": True, "person_id": person_id}, ensure_ascii=False)
     return json.dumps({"error": "该归属人已被发票引用，无法删除"}, ensure_ascii=False)
+
+
+# ── 标签管理工具 ────────────────────────────────
+
+@mcp.tool(
+    description="列出所有标签。"
+)
+def list_tags() -> str:
+    """列出所有标签"""
+    _ensure_ready()
+    tags = get_tags()
+    return json.dumps(tags, ensure_ascii=False)
+
+
+@mcp.tool(
+    description="创建新标签。"
+)
+def create_tag(name: str, color: str = "#3b82f6") -> str:
+    """
+    创建标签
+
+    Args:
+        name: 标签名称
+        color: 颜色十六进制值（如 #3b82f6）
+    """
+    _ensure_ready()
+    try:
+        tid = add_tag(name.strip(), color)
+        return json.dumps({"success": True, "id": tid, "name": name.strip(), "color": color}, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+
+@mcp.tool(
+    description="删除标签（从所有发票中移除此标签）。"
+)
+def delete_tag_tool(tag_id: int) -> str:
+    """
+    删除标签
+
+    Args:
+        tag_id: 标签 ID
+    """
+    _ensure_ready()
+    ok = delete_tag(tag_id)
+    if ok:
+        return json.dumps({"success": True, "tag_id": tag_id}, ensure_ascii=False)
+    return json.dumps({"error": "删除标签失败"}, ensure_ascii=False)
+
+
+@mcp.tool(
+    description="获取发票的标签列表。"
+)
+def get_invoice_tags_tool(invoice_id: int) -> str:
+    """
+    获取发票的标签
+
+    Args:
+        invoice_id: 发票 ID
+    """
+    _ensure_ready()
+    tags = get_invoice_tags(invoice_id)
+    return json.dumps(tags, ensure_ascii=False)
+
+
+@mcp.tool(
+    description="设置发票的标签（全量替换，传入空的 tag_ids 可清空所有标签）。"
+)
+def set_invoice_tags_tool(invoice_id: int, tag_ids: list[int]) -> str:
+    """
+    设置发票标签
+
+    Args:
+        invoice_id: 发票 ID
+        tag_ids: 标签 ID 列表，传入 [] 清空标签
+    """
+    _ensure_ready()
+    inv = get_invoice_by_id(invoice_id)
+    if not inv:
+        return json.dumps({"error": f"发票 #{invoice_id} 不存在"}, ensure_ascii=False)
+    set_invoice_tags(invoice_id, tag_ids)
+    return json.dumps({"success": True, "invoice_id": invoice_id, "tag_ids": tag_ids}, ensure_ascii=False)
 
 
 # ── 工具：导出 ────────────────────────────────────

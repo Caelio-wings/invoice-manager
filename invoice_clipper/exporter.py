@@ -227,3 +227,51 @@ def build_export_label(filters: dict) -> str:
     if not parts:
         parts.append(datetime.now().strftime("%Y%m%d"))
     return "_".join(parts)
+
+
+def export_zip_sources(invoices: List[dict], output_path: Path,
+                       include_attachments: bool = False) -> Optional[Path]:
+    """
+    打包发票源文件为 ZIP（保留原始 PDF/图片，不合并）。
+
+    Args:
+        invoices: 发票列表
+        output_path: 输出 ZIP 路径
+        include_attachments: 是否同时打包附件
+
+    Returns:
+        成功返回 Path，失败返回 None
+    """
+    import zipfile
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    count = 0
+
+    with zipfile.ZipFile(str(output_path), "w", zipfile.ZIP_DEFLATED) as zf:
+        for inv in invoices:
+            src = Path(inv.get("stored_path") or "")
+            if not src.exists():
+                continue
+            inv_no = (inv.get("invoice_number") or f"INV-{inv['id']}").replace("/", "_")
+            seller = (inv.get("seller_name") or "unknown")[:20]
+            folder = f"{inv_no}_{seller}/"
+            # 写入发票文件
+            arcname = folder + src.name
+            zf.write(str(src), arcname)
+            count += 1
+
+            # 打包附件
+            if include_attachments:
+                from invoice_clipper.database import get_attachments
+                atts = get_attachments(inv["id"])
+                for att in atts:
+                    att_path = Path(att["stored_path"])
+                    if att_path.exists():
+                        att_arcname = folder + "attachments/" + (att.get("original_name") or att_path.name)
+                        zf.write(str(att_path), att_arcname)
+
+    if count == 0:
+        logger.warning("没有可打包的源文件")
+        return None
+
+    logger.info(f"ZIP 源文件打包完成: {output_path}，共 {count} 张发票")
+    return output_path

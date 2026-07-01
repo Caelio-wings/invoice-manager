@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""发票夹子 Web UI — FastAPI + Jinja2 (v3.2.1)"""
+"""发票夹子 Web UI — FastAPI + Jinja2 (v3.3.0)"""
 import re
 import json
 import shutil
@@ -22,7 +22,10 @@ from invoice_clipper import (
     get_attachments, insert_attachment, delete_attachment,
     get_projects, add_project, delete_project,
     get_persons, add_person, delete_person,
+    get_tags, add_tag, delete_tag, get_invoice_tags, set_invoice_tags,
+    get_all_invoice_tags, get_invoices_by_ids,
     InvoiceProcessor, export_excel, export_merged_pdf, build_export_label,
+    export_zip_sources,
     build_attachment_path, next_attachment_seq,
 )
 from contextlib import asynccontextmanager
@@ -47,7 +50,7 @@ async def _lifespan(app: FastAPI):
         yield  # 应用运行中
 
 
-app = FastAPI(title="发票夹子", version="3.2.1", lifespan=_lifespan)
+app = FastAPI(title="发票夹子", version="3.3.0", lifespan=_lifespan)
 app.mount("/static", StaticFiles(directory=str(PKG_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(PKG_DIR / "templates"))
 
@@ -231,6 +234,10 @@ def get_list(request: Request, search: str = "", status: list[str] = Query(defau
         "page": "list",
         "invoices": invoices,
         "search": search, "status_filter": status,
+        "all_tags": get_tags(),
+        "invoice_tags": get_all_invoice_tags(),
+        "projects": get_projects(),
+        "persons": get_persons(),
         "stats": {
             "total": total, "ok_count": ok, "excluded_count": excluded,
             "reimbursable_amount": reimbursable, "total_amount": total_amount,
@@ -293,6 +300,39 @@ def delete_assignment_person(person_id: int):
     return flash_redirect("/assignments", "该归属人已被发票引用，无法删除", "warning")
 
 
+# ── 标签管理 ────────────────────────────────────────
+
+
+@app.get("/tags")
+def get_tags_page(request: Request):
+    ctx = get_flash(request)
+    ctx.update({
+        "page": "tags",
+        "tags": get_tags(),
+    })
+    return templates.TemplateResponse(request, "tags.html", ctx)
+
+
+@app.post("/tags")
+def add_tag_route(request: Request, name: str = Form(...), color: str = Form("#3b82f6")):
+    name = name.strip()
+    if not name:
+        return flash_redirect("/tags", "标签名称不能为空", "warning")
+    try:
+        add_tag(name, color)
+        return flash_redirect("/tags", f"标签「{name}」已创建")
+    except Exception as e:
+        return flash_redirect("/tags", f"创建失败: {e}", "error")
+
+
+@app.post("/tags/{tag_id}/delete")
+def delete_tag_route(tag_id: int):
+    ok = delete_tag(tag_id)
+    if ok:
+        return flash_redirect("/tags", "标签已删除")
+    return flash_redirect("/tags", "删除失败", "error")
+
+
 @app.post("/list/batch-toggle")
 def batch_toggle(request: Request, ids: list[int] = Form(...), action: str = Form(...)):
     cfg = request.app.state.config
@@ -301,6 +341,58 @@ def batch_toggle(request: Request, ids: list[int] = Form(...), action: str = For
         update_invoice_status(inv_id, excluded=excluded)
     label = "已排除" if excluded else "已恢复"
     return flash_redirect("/list", f"批量操作完成: {len(ids)} 张发票{label}")
+
+
+@app.post("/list/batch-delete")
+def batch_delete(request: Request, ids: list[int] = Form(...)):
+    """批量删除发票"""
+    cfg = request.app.state.config
+    deleted = 0
+    for inv_id in ids:
+        inv = get_invoice_by_id(inv_id)
+        if not inv:
+            continue
+        for att in get_attachments(inv_id):
+            p = Path(att["stored_path"])
+            if p.exists():
+                p.unlink()
+        stored = inv.get("stored_path")
+        if stored:
+            p = Path(stored)
+            if p.exists():
+                p.unlink()
+            parent = p.parent
+            try:
+                if parent.exists() and not any(parent.iterdir()):
+                    parent.rmdir()
+            except OSError:
+                pass
+        delete_invoice(inv_id)
+        deleted += 1
+    return flash_redirect("/list", f"批量删除完成: 已删除 {deleted} 张发票")
+
+
+@app.post("/list/batch-assign")
+def batch_assign(request: Request, ids: list[int] = Form(...),
+                 belong_project: str = Form(default=""),
+                 belong_person: str = Form(default="")):
+    """批量设置归属项目/归属人"""
+    updates = {}
+    if belong_project:
+        updates["belong_project"] = belong_project
+    if belong_person:
+        updates["belong_person"] = belong_person
+    if not updates:
+        return flash_redirect("/list", "未选择归属项目或归属人", "warning")
+    for inv_id in ids:
+        update_invoice(inv_id, updates)
+    return flash_redirect("/list", f"批量归属完成: 已更新 {len(ids)} 张发票")
+
+
+@app.post("/list/{inv_id}/tags")
+def set_invoice_tags_route(request: Request, inv_id: int, tag_ids: list[int] = Form(default=[])):
+    set_invoice_tags(inv_id, tag_ids)
+    return flash_redirect(f"/list/{inv_id}", "标签已更新")
 
 
 @app.get("/list/{inv_id}")
@@ -319,6 +411,8 @@ def get_edit(request: Request, inv_id: int):
         "attachments": attachments,
         "projects": projects,
         "persons": persons,
+        "all_tags": get_tags(),
+        "invoice_tags": get_invoice_tags(inv_id),
         "raw_json": json.dumps(dict(inv), ensure_ascii=False, indent=2, default=str),
     })
     return templates.TemplateResponse(request, "edit.html", ctx)
@@ -340,6 +434,15 @@ async def post_edit(request: Request, inv_id: int):
             else:
                 updates[field] = str(val)
     update_invoice(inv_id, updates)
+    # Handle tags
+    tag_ids_raw = form.getlist("tag_ids") if hasattr(form, "getlist") else form.get("tag_ids", [])
+    if tag_ids_raw:
+        if isinstance(tag_ids_raw, str):
+            tag_ids_raw = [tag_ids_raw]
+        tag_ids = [int(t) for t in tag_ids_raw if t]
+        set_invoice_tags(inv_id, tag_ids)
+    else:
+        set_invoice_tags(inv_id, [])
     return flash_redirect(f"/list/{inv_id}", "保存成功")
 
 
@@ -444,7 +547,27 @@ def get_query(request: Request):
 
     results = None
     total_amount = 0.0
-    if filters:
+
+    # Handle tag filtering
+    tag_ids_param = request.query_params.get("tag_ids", "")
+    if tag_ids_param and tag_ids_param.strip():
+        tag_ids = [int(x) for x in tag_ids_param.split(",") if x.strip().isdigit()]
+        # Get invoice IDs matching those tags
+        tag_invoices = search_invoices_by_tags(tag_ids)
+        tag_inv_ids = [i["id"] for i in tag_invoices]
+        # Apply additional filters on top of tag filter
+        if filters:
+            filters["exclude_ids"] = [i for i in range(-1)]  # dummy - we'll merge differently
+            # We need to get base filters then intersect
+            base_results = query_invoices(filters)
+            base_ids = {r["id"] for r in base_results}
+            tag_ids_set = set(tag_inv_ids)
+            intersection = base_ids & tag_ids_set
+            results = [r for r in base_results if r["id"] in intersection]
+        else:
+            results = tag_invoices
+        total_amount = sum(r.get("amount_with_tax") or 0 for r in results)
+    elif filters:
         results = query_invoices(filters)
         total_amount = sum(r.get("amount_with_tax") or 0 for r in results)
 
@@ -453,6 +576,7 @@ def get_query(request: Request):
         "page": "query",
         "results": results,
         "total_amount": total_amount,
+        "all_tags": get_tags(),
         "filters": {
             "date_from": request.query_params.get("date_from", ""),
             "date_to": request.query_params.get("date_to", ""),
@@ -461,6 +585,7 @@ def get_query(request: Request):
             "project": request.query_params.get("project", ""),
             "person": request.query_params.get("person", ""),
             "only_included": request.query_params.get("only_included", ""),
+            "tag_ids": request.query_params.get("tag_ids", ""),
         },
     })
     return templates.TemplateResponse(request, "query.html", ctx)
@@ -488,11 +613,22 @@ def _export_attachments_zip(invoices: list, zip_path: Path, cfg: dict):
 @app.get("/export")
 def get_export(request: Request):
     ctx = get_flash(request)
+    
+    # Handle pre-selected invoice IDs from list page
+    selected_ids_param = request.query_params.get("ids", "")
+    selected_invoices = []
+    if selected_ids_param:
+        ids_list = [int(x) for x in selected_ids_param.split(",") if x.strip().isdigit()]
+        if ids_list:
+            selected_invoices = get_invoices_by_ids(ids_list)
+
     ctx.update({
         "page": "export",
         "filters": {"date_from": "", "date_to": "", "seller": "", "buyer": "",
                      "project": "", "person": ""},
         "download_links": None, "invoice_count": None, "total_amount": 0.0,
+        "selected_invoices": selected_invoices,
+        "selected_ids": selected_ids_param,
     })
     return templates.TemplateResponse(request, "export.html", ctx)
 
@@ -502,21 +638,33 @@ async def post_export(request: Request):
     cfg = request.app.state.config
     form = await request.form()
 
-    filters = {}
-    for key in ("date_from", "date_to", "seller", "buyer", "project", "person"):
-        val = form.get(key, "").strip()
-        if val:
-            filters[key] = val
-    filters["only_included"] = True
+    # Determine invoice selection mode
+    selected_ids_str = form.get("selected_ids", "").strip()
+    if selected_ids_str:
+        # Selected-invoice mode: get by IDs
+        ids_list = [int(x) for x in selected_ids_str.split(",") if x.strip().isdigit()]
+        invoices = get_invoices_by_ids(ids_list)
+    else:
+        # Filter mode (existing): build filters from form
+        filters = {}
+        for key in ("date_from", "date_to", "seller", "buyer", "project", "person"):
+            val = form.get(key, "").strip()
+            if val:
+                filters[key] = val
+        filters["only_included"] = True
+        invoices = query_invoices(filters) if filters else []
 
-    include_pdf = form.get("include_pdf") == "on"
-    include_attachments = form.get("include_attachments") == "on"
-    invoices = query_invoices(filters) if filters else []
     total_amount = sum(i.get("amount_with_tax") or 0 for i in invoices)
+    if not invoices:
+        return flash_redirect("/export", "没有符合条件的发票", "warning")
+
+    # Export mode
+    export_mode = form.get("export_mode", "invoice_only")  # invoice_only | with_attachments
+    package_mode = form.get("package_mode", "merged_pdf")  # merged_pdf | source_zip | both
 
     export_dir = Path.home() / "Documents" / "发票夹子" / "exports"
     export_dir.mkdir(parents=True, exist_ok=True)
-    label = build_export_label(filters) if filters else "全部"
+    label = build_export_label(form) if not selected_ids_str else f"选中{len(invoices)}张"
     download_links = []
 
     try:
@@ -525,9 +673,10 @@ async def post_export(request: Request):
         export_excel(invoices, excel_path)
         download_links.append({"label": "下载 Excel", "filename": excel_path.name})
 
-        # 合并 PDF (可选)
-        if include_pdf:
-            # 若同时勾选了附件打包，构建附件映射（发票→附件列表）嵌入 PDF
+        include_attachments = export_mode == "with_attachments"
+
+        # Merged PDF
+        if package_mode in ("merged_pdf", "both"):
             att_map = None
             if include_attachments:
                 att_map = {}
@@ -538,8 +687,15 @@ async def post_export(request: Request):
             if result:
                 download_links.append({"label": "下载合并 PDF", "filename": pdf_path.name})
 
-        # 附件打包 (可选)
-        if include_attachments:
+        # Source ZIP
+        if package_mode in ("source_zip", "both"):
+            zip_path = export_dir / f"源文件_{label}.zip"
+            result = export_zip_sources(invoices, zip_path, include_attachments=include_attachments)
+            if result:
+                download_links.append({"label": "下载源文件 ZIP", "filename": zip_path.name})
+
+        # Legacy: attachment-only ZIP (only when mode is with_attachments and package is merged_pdf or both)
+        if include_attachments and package_mode == "merged_pdf":
             zip_path = export_dir / f"发票附件_{label}.zip"
             _export_attachments_zip(invoices, zip_path, cfg)
             if zip_path.exists():
@@ -551,10 +707,12 @@ async def post_export(request: Request):
     ctx = get_flash(request)
     ctx.update({
         "page": "export",
-        "filters": filters,
+        "filters": filters if not selected_ids_str else {},
         "download_links": download_links,
         "invoice_count": len(invoices),
         "total_amount": total_amount,
+        "selected_ids": selected_ids_str,
+        "selected_invoices": invoices if selected_ids_str else [],
     })
     return templates.TemplateResponse(request, "export.html", ctx)
 
@@ -572,6 +730,70 @@ def download_export(filename: str):
     return FileResponse(filepath, filename=filename)
 
 
+# ── 智能凑票 ────────────────────────────────────────
+
+
+@app.get("/match-amount")
+def get_match_amount(request: Request):
+    ctx = get_flash(request)
+    ctx.update({
+        "page": "match_amount",
+        "target_amount": "",
+        "max_count": 10,
+        "candidates": None,
+        "filters": {},
+    })
+    return templates.TemplateResponse(request, "match_amount.html", ctx)
+
+
+@app.post("/match-amount")
+async def post_match_amount(request: Request):
+    cfg = request.app.state.config
+    form = await request.form()
+
+    try:
+        target_amount = float(form.get("target_amount", 0))
+    except (ValueError, TypeError):
+        return flash_redirect("/match-amount", "请输入有效金额", "warning")
+
+    if target_amount <= 0:
+        return flash_redirect("/match-amount", "目标金额必须大于0", "warning")
+
+    try:
+        max_count = int(form.get("max_count", 10))
+    except (ValueError, TypeError):
+        max_count = 10
+
+    # Build filters for candidate invoices
+    filters = {}
+    for key in ("date_from", "date_to", "project", "person"):
+        val = form.get(key, "").strip()
+        if val:
+            filters[key] = val
+    filters["only_included"] = True  # Only reimbursable invoices
+
+    # Get candidate invoices
+    from invoice_clipper.matcher import find_multiple_candidates
+    candidates_raw = query_invoices(filters)
+    
+    total_available = sum(i.get("amount_with_tax") or 0 for i in candidates_raw)
+
+    # Run matching algorithm
+    candidates = find_multiple_candidates(candidates_raw, target_amount, count=3, max_count=max_count)
+
+    ctx = get_flash(request)
+    ctx.update({
+        "page": "match_amount",
+        "target_amount": target_amount,
+        "max_count": max_count,
+        "candidates": candidates,
+        "total_candidates": len(candidates_raw),
+        "total_available": total_available,
+        "filters": filters,
+    })
+    return templates.TemplateResponse(request, "match_amount.html", ctx)
+
+
 # ── Web 启动器（供 invoice-manager-web 命令使用）─
 
 def main():
@@ -581,7 +803,7 @@ def main():
     port = int(cfg.get("server", {}).get("port", 8000))
 
     url = f"http://{host}:{port}"
-    print(f"发票夹子 v3.2.1 正在启动 ...")
+    print(f"发票夹子 v3.3.0 正在启动 ...")
     print(f"   配置文件: {cfg_path}")
     print(f"   本地地址: {url}")
 

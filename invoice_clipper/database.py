@@ -173,3 +173,46 @@ def delete_attachments_by_invoice(invoice_id: int) -> int:
 
 def delete_invoice(invoice_id: int) -> bool:
     return get_backend().delete_invoice(invoice_id)
+
+
+# ── 标签系统 ─────────────────────────────────────
+
+
+def get_tags() -> List[dict]:
+    """获取所有标签 [{id, name, color, created_at}]"""
+    return get_backend().get_tags()
+
+
+def add_tag(name: str, color: str = "#3b82f6") -> int:
+    """创建标签，返回 id"""
+    return get_backend().add_tag(name, color)
+
+
+def delete_tag(tag_id: int) -> bool:
+    """删除标签"""
+    return get_backend().delete_tag(tag_id)
+
+
+def get_invoice_tags(invoice_id: int) -> List[dict]:
+    """获取发票的所有标签"""
+    return get_backend().get_invoice_tags(invoice_id)
+
+
+def set_invoice_tags(invoice_id: int, tag_ids: List[int]):
+    """设置发票的标签（全量替换）"""
+    get_backend().set_invoice_tags(invoice_id, tag_ids)
+
+
+def get_invoices_by_ids(ids: List[int]) -> List[dict]:
+    """根据 ID 列表批量获取发票"""
+    return get_backend().get_invoices_by_ids(ids)
+
+
+def search_invoices_by_tags(tag_ids: List[int]) -> List[dict]:
+    """根据标签 ID 列表获取所有关联的发票"""
+    return get_backend().search_invoices_by_tags(tag_ids)
+
+
+def get_all_invoice_tags() -> dict:
+    """返回 {invoice_id: [{id, name, color}, ...]} 映射"""
+    return get_backend().get_all_invoice_tags()
