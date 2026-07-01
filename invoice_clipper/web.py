@@ -334,7 +334,7 @@ def delete_tag_route(tag_id: int):
 
 
 @app.post("/list/batch-toggle")
-def batch_toggle(request: Request, ids: list[int] = Form(...), action: str = Form(...)):
+def batch_toggle(request: Request, ids: list[int] = Form(...), action: str = Query(...)):
     cfg = request.app.state.config
     excluded = action == "exclude"
     for inv_id in ids:
