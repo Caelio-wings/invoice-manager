@@ -41,6 +41,7 @@ class InvoiceProcessor:
         # 临时变量，用于记录处理中的信息
         self._original_filename = ""
         self._raw_text = ""
+        self._error: Optional[str] = None
 
     def _init_engines(self):
         """初始化识别引擎（按优先级）"""
@@ -83,6 +84,7 @@ class InvoiceProcessor:
         suffix = file_path.suffix.lower()
         if suffix not in [".pdf", ".ofd", ".png", ".jpg", ".jpeg", ".bmp", ".tiff"]:
             logger.warning(f"不支持的文件类型: {suffix}")
+            self._error = f"不支持的文件类型: {suffix}"
             return None
 
         self._original_filename = file_path.name
@@ -95,6 +97,7 @@ class InvoiceProcessor:
                 logger.info(f"OFD 转 PDF 成功: {working_path.name}")
             except Exception as e:
                 logger.error(f"OFD 转换失败: {e}")
+                self._error = f"OFD 转换失败: {e}"
                 return None
 
         # ── 2. 内容预检（可选，快速过滤非发票文件）──────────
@@ -114,6 +117,7 @@ class InvoiceProcessor:
         # ── 3. 两级识别 ────────────────────────────────────
         fields = self._recognize(working_path)
         if not fields:
+            err = self._error or "所有识别引擎均失败"
             logger.error(f"所有识别引擎均失败: {file_path.name}")
             return None
 
@@ -122,10 +126,14 @@ class InvoiceProcessor:
         amount = fields.get("amount_with_tax", 0)
         if inv_no:
             if is_duplicate(inv_no, amount):
-                logger.warning(f"重复发票（发票号+金额相同），跳过: {inv_no} / {amount:.2f}")
+                msg = f"重复发票（发票号+金额相同）: {inv_no}"
+                logger.warning(msg)
+                self._error = msg
                 return None
             if exists_by_invoice_number(inv_no):
-                logger.warning(f"重复发票（发票号已存在），跳过: {inv_no}")
+                msg = f"重复发票（发票号已存在）: {inv_no}"
+                logger.warning(msg)
+                self._error = msg
                 return None
 
         # ── 5. 归档文件 ────────────────────────────────────
@@ -152,6 +160,7 @@ class InvoiceProcessor:
 
     def _recognize(self, file_path: Path) -> Optional[Dict[str, Any]]:
         """执行三级识别引擎"""
+        errors = []
         for engine in self.engines:
             logger.info(f"尝试第{engine.priority}级引擎: {engine.name}")
             result = engine.extract(str(file_path))
@@ -161,10 +170,14 @@ class InvoiceProcessor:
                 # 保存原始JSON供调试
                 if hasattr(result, 'raw_json'):
                     self._raw_json = result.raw_json
+                self._error = None
                 return result.data
 
-            logger.warning(f"⚠️ {engine.name} 失败: {result.error or '无效结果'}")
+            err_msg = result.error or '无效结果'
+            logger.warning(f"⚠️ {engine.name} 失败: {err_msg}")
+            errors.append(f"{engine.name}: {err_msg}")
 
+        self._error = "所有识别引擎均失败: " + "; ".join(errors)
         return None
 
     def _build_record(self, fields: Dict[str, Any], archived_path: Path, source: str) -> Dict[str, Any]:

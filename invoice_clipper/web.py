@@ -176,6 +176,7 @@ async def post_scan(request: Request, files: list[UploadFile] = File(...)):
             "id": r.get("id", "?") if r else "?",
             "filename": f.filename or "-",
             "ok": r is not None,
+            "error": proc._error if not r else None,
             "invoice_number": r.get("invoice_number", "-") if r else "-",
             "invoice_date": r.get("invoice_date", "-") if r else "-",
             "seller_name": r.get("seller_name", "-") if r else "-",

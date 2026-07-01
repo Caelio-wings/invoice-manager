@@ -32,9 +32,16 @@
     </div>
 
     <div style="margin-top: 16px;">
-      <button type="submit" class="btn btn-primary">开始识别</button>
+      <button type="submit" class="btn btn-primary" id="scan-btn">开始识别</button>
     </div>
   </form>
+
+  <!-- 扫描进度提示（初始隐藏） -->
+  <div id="scan-progress" class="scan-progress" style="display: none;">
+    <div class="spinner"></div>
+    <div class="scan-progress-text">正在处理中，请稍候…</div>
+    <div class="scan-progress-hint">发票识别通常需要 3-15 秒，文件越大耗时越长</div>
+  </div>
 </div>
 
 <script>
@@ -44,8 +51,14 @@ document.getElementById('scan-form').addEventListener('submit', function(e) {
   if (!project && !person) {
     if (!confirm('您未选择归属项目和归属人，是否继续？')) {
       e.preventDefault();
+      return;
     }
   }
+  // 显示进度提示，禁用按钮
+  const btn = document.getElementById('scan-btn');
+  btn.disabled = true;
+  btn.textContent = '处理中…';
+  document.getElementById('scan-progress').style.display = 'block';
 });
 </script>
 
@@ -80,7 +93,12 @@ document.getElementById('scan-form').addEventListener('submit', function(e) {
           <td class="center">
             <span class="tag {{ 'tag-success' if r.ok else 'tag-danger' }}">{{ 'OK' if r.ok else 'FAIL' }}</span>
           </td>
-          <td>{{ r.filename }}</td>
+          <td>
+            {{ r.filename }}
+            {% if not r.ok and r.error %}
+            <div class="error-detail">{{ r.error }}</div>
+            {% endif %}
+          </td>
           <td>{{ r.invoice_number }}</td>
           <td>{{ r.invoice_date }}</td>
           <td>{{ r.seller_name }}</td>
