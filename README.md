@@ -2,7 +2,7 @@
   <img src="https://img.shields.io/badge/Python-3.12+-blue.svg" alt="Python 3.12+">
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License">
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg" alt="Platform">
-  <img src="https://img.shields.io/badge/Version-3.3.0-brightgreen.svg" alt="v3.3.0">
+  <img src="https://img.shields.io/badge/Version-3.3.1-brightgreen.svg" alt="v3.3.1">
 </p>
 
 <h1 align="center">发票夹子 🧾</h1>
@@ -84,7 +84,7 @@ uv run python invoice_clipper/__main__.py export --from 2025-03 --format both
 ### Wheel 包（推荐）
 
 ```bash
-pip install dist/invoice_manager-3.3.0-py3-none-any.whl
+pip install dist/invoice_manager-3.3.1-py3-none-any.whl
 ```
 
 安装后可用命令：
@@ -165,7 +165,7 @@ invoice-manager/
 │   ├── __init__.py               # load_config + 所有模块导出
 │   ├── __main__.py               # pip 入口点
 │   ├── __run__.py                # 进程锁启动入口（支持 --debug）
-│   ├── web.py                    # FastAPI Web UI (v3.3.0)
+│   ├── web.py                    # FastAPI Web UI (v3.3.1)
 │   ├── mcp_server.py             # MCP AI Agent 接口
 │   ├── database.py               # 数据库调度层
 │   ├── db_backends.py            # SQLite + PostgreSQL 后端
@@ -193,7 +193,7 @@ invoice-manager/
 │       ├── baidu_ocr.py          # 百度 OCR
 │       └── llm_vision.py         # 大模型视觉
 └── dist/
-    └── invoice_manager-3.3.0-py3-none-any.whl
+    └── invoice_manager-3.3.1-py3-none-any.whl
 ```
 
 ---
@@ -219,16 +219,12 @@ invoice-manager/
 
 ---
 
-## 🎯 v3.3.0 新增功能
+## 🎯 v3.3.1 新增功能
 
 | 功能 | 说明 |
 |------|------|
-| 🏷️ **标签系统** | 彩色标签 + 发票批量打标 + 按标签筛选 |
-| 🎯 **智能凑票** | DP 算法自动匹配 ≤ 目标金额的最优发票组合 |
-| 📊 **导出增强** | 可选择特定发票、发票/附件模式、合并PDF/源文件ZIP |
-| 🔄 **批量操作重构** | 浮动工具栏 + 行内复选框 + 快速操作按钮 |
-| 🐛 **调试模式** | `--debug` 参数跳过进程锁，方便开发调试 |
-| 🤖 **MCP 扩展** | 新增标签相关 AI Agent 工具 |
+| 🐛 **批量状态修复** | 批量标记排除/恢复正常接口修复 |
+| ♾️ **凑票张数不限** | `max_count=0` 表示不限制张数 |
 
 ---
 
