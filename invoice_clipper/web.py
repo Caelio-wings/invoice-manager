@@ -760,9 +760,12 @@ async def post_match_amount(request: Request):
         return flash_redirect("/match-amount", "目标金额必须大于0", "warning")
 
     try:
-        max_count = int(form.get("max_count", 10))
+        max_count = int(form.get("max_count", 0))
     except (ValueError, TypeError):
-        max_count = 10
+        max_count = 0
+    # 0 代表不限制张数
+    if max_count <= 0:
+        max_count = 9999
 
     # Build filters for candidate invoices
     filters = {}
