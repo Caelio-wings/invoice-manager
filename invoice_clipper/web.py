@@ -739,7 +739,7 @@ def get_match_amount(request: Request):
     ctx.update({
         "page": "match_amount",
         "target_amount": "",
-        "max_count": 10,
+        "max_count": 0,
         "candidates": None,
         "filters": {},
     })
