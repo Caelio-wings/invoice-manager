@@ -227,6 +227,8 @@ document.addEventListener('change', function(e) {
     const td = tr.children[idx];
     if (!td) return '';
     const raw = td.textContent.trim();
+    // 日期格式 YYYY-MM-DD 直接返回字符串，让 Date.parse 处理
+    if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw;
     const num = parseFloat(raw.replace(/[¥,\s]/g, ''));
     if (!isNaN(num)) return num;
     return raw;
